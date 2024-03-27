@@ -3,6 +3,7 @@
 *.pdf
 *.obj
 *.pdb
+*.dat
 *Debug*
 *Release*
 *.sln

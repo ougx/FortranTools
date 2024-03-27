@@ -3,7 +3,7 @@
 program arraymath
   use f90getopt
   use m_mrgref
-
+  use iso_fortran_env, only: input_unit, error_unit
   implicit none
 
   real, parameter :: verysmall = tiny(1.0) * 1e5
@@ -27,9 +27,9 @@ program arraymath
 
   allocate(opts, source=(/&
     option_s("dim"    ,  "d", 2, "shape of the array, i.e. nrow ncol; this must be defined as the first argument."), &
-    option_s("add"    ,  "a", 3, "adding a new array, follwed by three arguments: arrayfile multiplyfile scale, if multiplyfile is '-', no multiarray is used."), &
-    option_s("multi"  ,  "m", 1, "multiply with a new array reading from a file; follwed by one argument: multiplyfile."), &
-    option_s("dot"  ,   "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile."), &
+    option_s("add"    ,  "a", 3, "adding a new array, follwed by three arguments: arrayfile multiplyfile scale; if arrayfile is '-', it reads stdin; if multiplyfile is '-', no multiarray is used."), &
+    option_s("multi"  ,  "m", 1, "multiply with a new array reading from a file; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
+    option_s("dot"  ,   "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
     option_s("help"   ,  "h", 0, "show this message."), &
     option_s("fmt"    ,  "f", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
     option_s("offset" ,  "o", 1, "adding offset to the final result, default is zero."), &
@@ -104,13 +104,23 @@ program arraymath
 
       case("m")
         read(optarg, *) multfile
-        call readdata(multfile, multi)
+        if (trim(multfile) == '-') then
+          !TODO:
+          read(input_unit, *) multi
+        else
+          call readdata(multfile, multi)
+        end if
         if (verbose) print*, "Multiplying array from "//trim(arrfile)
         results = results * multi
 
       case("dt")
         read(optarg, *) multfile
-        call readdata(multfile, multi)
+        if (trim(multfile) == '-') then
+          !TODO:
+          read(input_unit, *) multi
+        else
+          call readdata(multfile, multi)
+        end if
         call SGEMM('N','N',nrow,ncol,ncol,1.0,results,ncol,multi,ncol,0.0,array,ncol)
         results = array
 
@@ -118,7 +128,12 @@ program arraymath
         read(optarg, *) arrfile, multfile, rscale
         if (verbose) print*, "Adding array from "//trim(arrfile)
 
-        call readdata(arrfile, array)
+        if (trim(arrfile) == '-') then
+          !TODO:
+          read(input_unit, *) array
+        else
+          call readdata(arrfile, array)
+        end if
 
         if (trim(multfile) /= '' .and. trim(multfile) /= '-') then
           call readdata(multfile, multi)
@@ -375,7 +390,6 @@ program arraymath
   end subroutine
 
   subroutine perror(msg)
-    use iso_fortran_env, only : error_unit
     character(*) :: msg
     write(error_unit, '(A)') msg
     stop
