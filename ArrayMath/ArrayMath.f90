@@ -25,10 +25,11 @@ program arraymath
   integer         :: nrow, ncol, itemp, mdim, hasRowName, hasColName, maxRowNameWidth
   integer, allocatable:: rowindex(:)
 
-
   allocate(opts, source=(/&
     option_s("dim"    ,  "d", 2, "shape of the array, i.e. nrow ncol; this must be defined as the first argument."), &
     option_s("add"    ,  "a", 3, "adding a new array, follwed by three arguments: arrayfile multiplyfile scale, if multiplyfile is '-', no multiarray is used."), &
+    option_s("multi"  ,  "m", 1, "multiply with a new array reading from a file; follwed by one argument: multiplyfile."), &
+    option_s("dot"  ,   "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile."), &
     option_s("help"   ,  "h", 0, "show this message."), &
     option_s("fmt"    ,  "f", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
     option_s("offset" ,  "o", 1, "adding offset to the final result, default is zero."), &
@@ -41,8 +42,8 @@ program arraymath
     option_s("verbose",  "v", 0, "print running logs to screen."), &
     option_s("rowname", "rn", 0, "enable/disable reading row names from the first column after skipping columns. default is off."), &
     option_s("colname", "cn", 0, "enable/disable reading column names from the first row after skipping rows. default is off."), &
-    option_s("mfbin" ,   "m", 0, "TODO: read modflow binary file"), &
-    option_s("mfdbin",   "m", 0, "TODO: read modflow binary file in double precision")  &
+    option_s("mfbin" ,  "mb", 0, "TODO: read modflow binary file"), &
+    option_s("mfdbin",  "md", 0, "TODO: read modflow binary file in double precision")  &
   /))
 
 
@@ -100,6 +101,18 @@ program arraymath
         read(optarg, *) func
         call to_lower(func)
         call applyfunc()
+
+      case("m")
+        read(optarg, *) multfile
+        call readdata(multfile, multi)
+        if (verbose) print*, "Multiplying array from "//trim(arrfile)
+        results = results * multi
+
+      case("dt")
+        read(optarg, *) multfile
+        call readdata(multfile, multi)
+        call SGEMM('N','N',nrow,ncol,ncol,1.0,results,ncol,multi,ncol,0.0,array,ncol)
+        results = array
 
       case("a")
         read(optarg, *) arrfile, multfile, rscale
@@ -240,12 +253,14 @@ program arraymath
         deallocate(results)
         allocate(results, source=trans)
         deallocate(trans)
+        colnames(1:ncol)=colnames(idx1:idx2)
       else
         nrow = idx2-idx1+1
         allocate(trans, source=results(:,idx1:idx2))
         deallocate(results)
         allocate(results, source=trans)
         deallocate(trans)
+        rownames(1:nrow)=rownames(idx1:idx2)
       end if
     else
       idx2 = 1
@@ -268,12 +283,14 @@ program arraymath
         deallocate(results)
         allocate(results, source=trans)
         deallocate(trans)
+        colnames(1:ncol)=colnames(idxs(:nidx))
       else
         nrow = nidx
         allocate(trans, source=results(:,idxs(:nidx)))
         deallocate(results)
         allocate(results, source=trans)
         deallocate(trans)
+        rownames(1:nrow)=rownames(idxs(:nidx))
       end if
     end if
   end subroutine
@@ -297,6 +314,8 @@ program arraymath
   if (trim(func)=='int'  )    then; results = int     (results); else &
   if (trim(func)=='nint' )    then; results = nint    (results); else &
   if (trim(func)=='floor')    then; results = floor   (results); else &
+  if (trim(func)=='inverse')  then; results = 1.0    / results ; else &
+  if (trim(func)=='matinv')   then; call matinv(results)       ; else &
   if (trim(func)=='fraction') then; results = fraction(results); else &
   if (trim(func)=='diff1')    then; do itemp=2, nrow; results(:,itemp) = results(:,itemp)-results(:,1); end do; results(:,1)=0; else &
   if (trim(func)=='diff')     then; results(:,2:nrow) = results(:,2:nrow)-results(:,1:nrow-1);results(:, 1)=0; else &
@@ -333,6 +352,27 @@ program arraymath
   end if
   end subroutine
 
+  subroutine matinv(matA)
+    INTEGER              :: INFO, LWORK
+    integer, external    :: ILAENV
+    INTEGER, allocatable :: IPIV(:)
+    REAL, allocatable    :: WORK(:)
+    real, contiguous     :: matA(:,:)
+    allocate(IPIV(nrow))
+
+    call SGETRF( nrow, ncol, matA, ncol, IPIV, INFO )
+    if (INFO /= 0) then
+      call perror('Matrix factorization failed.')
+    end if
+
+    LWORK = nrow*ILAENV( 1, 'SGETRI', ' ', nrow, -1, -1, -1 )
+    allocate(WORK(LWORK))
+
+    call SGETRI( nrow, matA, ncol, IPIV, WORK, LWORK, INFO )
+    if (INFO /= 0) then
+      call perror('Matrix inverse failed.')
+    end if
+  end subroutine
 
   subroutine perror(msg)
     use iso_fortran_env, only : error_unit
@@ -377,6 +417,8 @@ program arraymath
     print "(A)", '     int:       converts the array to integer type.'
     print "(A)", '     nint:      rounds the array to the nearest whole number.'
     print "(A)", '     floor:     returns the greatest integer less than or equal to the array.'
+    print "(A)", '     inverse:   computes the reciprocal of each element in the array.'
+    print "(A)", '     minv:      computes the matrix inverse of the array, using the LU factorization.'
     print "(A)", '     fraction:  returns the fractional part of the model representation of the array.'
     print "(A)", '     diff1:     subtract the first row from the array.'
     print "(A)", '     diff:      calculates the difference of each row and its previous row: row_i - row_(i-1).'
