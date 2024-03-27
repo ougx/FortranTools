@@ -1,0 +1,16 @@
+*.vs*
+*.cbp
+*.pdf
+*.obj
+*.pdb
+*Debug*
+*Release*
+*.sln
+*.u2d
+*.suo
+*.vfproj
+*.user
+*.manifest
+*BuildLog.htm
+*.mod
+*.exe

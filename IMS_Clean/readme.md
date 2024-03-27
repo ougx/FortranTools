@@ -1,0 +1,1 @@
+read a NWT file and write a clean version
