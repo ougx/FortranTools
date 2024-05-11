@@ -3,7 +3,7 @@
 program arraymath
   use f90getopt
   use m_mrgref
-  use iso_fortran_env, only: input_unit, error_unit
+  use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
 
   real, parameter :: verysmall = tiny(1.0) * 1e5
@@ -31,14 +31,16 @@ program arraymath
     option_s("multi"  ,  "m", 1, "multiply with a new array reading from a file; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
     option_s("dot"  ,   "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
     option_s("help"   ,  "h", 0, "show this message."), &
-    option_s("fmt"    ,  "f", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
+    option_s("fmt"    , "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
     option_s("offset" ,  "o", 1, "adding offset to the final result, default is zero."), &
     option_s("skiprow", "sr", 1, "number of rows to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
     option_s("skipcol", "sc", 1, "number of columns to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
     option_s("func"   ,  "x", 1, "apply a Fortran intrinsic mathematical function to the final result"), &
+    option_s("groupby",  "g", 2, "split and apply a function."), &
     option_s("power"  ,  "p", 1, "apply a power function to the final result"), &
     option_s("clip",     "c", 2, "clip the array to the interval between vmin and vmax. if `-c 0 1` is specified, values smaller than 0 become 0, and values larger than 1 become 1."), &
     option_s("subset" ,  "s", 1, "subset the array. -s r1:10 to subset the first 10 rows; -s c1,3,5 to subset the columns 1,3 and 5; -s r2:2 or -s c5:5 to subset one row or column."), &
+    option_s("filter" ,  "f", 1, "filter array by column names, e.g. --filter time>=3; --filter layer==1"), &
     option_s("verbose",  "v", 0, "print running logs to screen."), &
     option_s("rowname", "rn", 0, "enable/disable reading row names from the first column after skipping columns. default is off."), &
     option_s("colname", "cn", 0, "enable/disable reading column names from the first row after skipping rows. default is off."), &
@@ -62,17 +64,16 @@ program arraymath
 
   do
     opt = getopt(opts)
-    select case(opt)
+    select case(trim(opt))
 
       case(char(0)) ! When all options are processed
         if (len_trim(optarg)>0) outfile = trim(optarg)
-        !print*, 'Results will be written to '//trim(outfile)
         exit
 
       case("d")
         read(optarg, *) nrow, ncol
         mdim = max(nrow,ncol)
-        allocate(results(ncol, nrow), array(ncol, nrow), multi(ncol, nrow))
+        allocate(results(ncol, nrow))
         allocate(rownames(0:mdim), colnames(0:mdim), tmpnames(0:mdim), rowindex(mdim))
         results = 0.
         rownames = ''
@@ -88,6 +89,10 @@ program arraymath
       case("s")
         call subset()
 
+      case("f")
+        if (hasColName==0) call perror('filter option can only applied to named columns')
+        call filter()
+
       case("p")
         read(optarg, *) power
         results = results ** power
@@ -98,23 +103,29 @@ program arraymath
         results = merge(results, vmax, results<vmax)
 
       case("x")
-        read(optarg, *) func
-        call to_lower(func)
         call applyfunc()
+
+      case("g")
+        if (hasColName==0) call perror('groupby option can only applied to named columns')
+        call groupby()
 
       case("m")
         read(optarg, *) multfile
+        allocate(multi, source=results)
         if (trim(multfile) == '-') then
           !TODO:
           read(input_unit, *) multi
         else
           call readdata(multfile, multi)
         end if
-        if (verbose) print*, "Multiplying array from "//trim(arrfile)
+        if (verbose) print*, "Multiplying array from "//trim(multfile)
         results = results * multi
+        deallocate(multi)
 
       case("dt")
         read(optarg, *) multfile
+        allocate(array, source=results)
+        allocate(multi, source=results)
         if (trim(multfile) == '-') then
           !TODO:
           read(input_unit, *) multi
@@ -123,11 +134,15 @@ program arraymath
         end if
         call SGEMM('N','N',nrow,ncol,ncol,1.0,results,ncol,multi,ncol,0.0,array,ncol)
         results = array
+        deallocate(array)
+        deallocate(multi)
 
       case("a")
         read(optarg, *) arrfile, multfile, rscale
         if (verbose) print*, "Adding array from "//trim(arrfile)
 
+        allocate(array, source=results)
+        allocate(multi, source=results)
         if (trim(arrfile) == '-') then
           !TODO:
           read(input_unit, *) array
@@ -141,6 +156,8 @@ program arraymath
         end if
 
         results = results + array * rscale
+        deallocate(array)
+        deallocate(multi)
 
       case("sr")
         read(optarg, *) nskiprow
@@ -152,7 +169,7 @@ program arraymath
         read(optarg, *) roffset
         if (abs(roffset) > verysmall) results = results + roffset
 
-      case("f")
+      case("fm")
         fomt=trim(optarg)
 
       case("h")
@@ -180,19 +197,19 @@ program arraymath
   !  results = 0.
   !end where
   if (trim(outfile)=='~') then
-    ifile = 6 ! print to IO
+    ifile = output_unit ! print to IO
   else
     open(newunit=ifile, file=outfile, status='replace')
   end if
 
-  if (hasRowName) then
+  if (hasRowName==1) then
     do irow=1, nrow
       maxRowNameWidth = max(maxRowNameWidth, len_trim(rownames(irow)))
     end do
   else
     maxRowNameWidth =0
   end if
-  if (hasColName) write(ifile, '(*(A,x))') colnames(0)(:maxRowNameWidth), (colnames(icol)(1:max(9,len_trim(colnames(icol)))),icol=1,ncol)
+  if (hasColName==1) write(ifile, '(*(A,x))') colnames(0)(:maxRowNameWidth), (colnames(icol)(1:max(9,len_trim(colnames(icol)))),icol=1,ncol)
 
   do irow=1, nrow
     write(ifile, fomt) rownames(irow)(:maxRowNameWidth), results(1:ncol, irow)
@@ -205,7 +222,7 @@ program arraymath
 
   subroutine readdata(afile, arr)
   character(1024) :: afile
-  real            :: arr(ncol,nrow)
+  real            :: arr(:,:)
 
   open(newunit=ifile, file=trim(afile), status='old')
 
@@ -244,6 +261,77 @@ program arraymath
   close(ifile)
   end subroutine
 
+  subroutine filter()
+    integer              :: idx0,idx1,idx2,idxc
+    real                 :: rv
+    character(30)        :: cname
+    integer, allocatable :: idxs(:)
+
+    idx0=index(optarg, '<')
+    idx1=index(optarg, '>')
+    idx2=index(optarg, '=')
+
+    if (idx0==0 .and. idx1==0 .and. idx2==0) call perror('Incorrect filter clause: '//trim(optarg))
+    allocate(idxs(nrow))
+    do idxc=1, nrow
+      idxs(idxc)=idxc
+    end do
+
+    if(idx0>0) then
+      read(optarg(:idx0-1), *) cname
+      idxc = get_idxcol(cname)
+      if (idx2==0) then
+        read(optarg(idx0+1:), *) rv
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)<rv)))
+      else
+        if (idx2 /= idx0 + 1) call perror('Incorrect filter clause: '//trim(optarg))
+        read(optarg(idx0+2:), *) rv
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)<=rv)))
+      end if
+    elseif (idx1>0) then
+      idx0 = idx1
+      read(optarg(:idx0-1), *) cname
+      idxc = get_idxcol(cname)
+      if (idx2==0) then
+        read(optarg(idx0+1:), *) rv
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)>rv)))
+      else
+        if (idx2 /= idx0 + 1) call perror('Incorrect filter clause: '//trim(optarg))
+        read(optarg(idx0+2:), *) rv
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)>=rv)))
+      end if
+    else
+      idx0 = idx2
+      if (optarg(idx0-1:idx0-1)=='/') then
+        read(optarg(:idx0-2), *) cname
+        read(optarg(idx0+1:), *) rv
+        idxc = get_idxcol(cname)
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)/=rv)))
+      else if (optarg(idx0+1:idx0+1)=='=') then
+        read(optarg(:idx0-1), *) cname
+        read(optarg(idx0+2:), *) rv
+        idxc = get_idxcol(cname)
+        call redefine_array(source=results(:,pack(idxs,results(idxc,:)==rv)))
+      else
+        call perror('Incorrect filter clause: '//trim(optarg))
+      end if
+    end if
+    if (nrow==0) call perror('Filter clause remove all data: '//trim(optarg))
+  end subroutine
+
+  integer function get_idxcol(cname)
+    character(*)        :: cname
+    integer              :: idxc
+    get_idxcol = 0
+    do idxc=1, ncol
+      if (trim(colnames(idxc))==trim(cname)) then
+        get_idxcol = idxc
+        return
+      end if
+    end do
+    call perror('Could not identify column name: '//trim(cname))
+  end function
+
   subroutine subset()
     integer              :: idx0,idx1,idx2,nidx
     integer              :: idxs(9999)
@@ -263,18 +351,10 @@ program arraymath
       read(optarg(2:idx0-1),*) idx1
       read(optarg(idx0+1: ),*) idx2
       if (optarg(1:1)=='c') then
-        ncol = idx2-idx1+1
-        allocate(trans, source=results(idx1:idx2,:))
-        deallocate(results)
-        allocate(results, source=trans)
-        deallocate(trans)
+        call redefine_array(source=results(idx1:idx2,:))
         colnames(1:ncol)=colnames(idx1:idx2)
       else
-        nrow = idx2-idx1+1
-        allocate(trans, source=results(:,idx1:idx2))
-        deallocate(results)
-        allocate(results, source=trans)
-        deallocate(trans)
+        call redefine_array(source=results(:,idx1:idx2))
         rownames(1:nrow)=rownames(idx1:idx2)
       end if
     else
@@ -285,33 +365,73 @@ program arraymath
         idx2 = index(optarg(idx1:), ",")
         if (idx2==0) exit
         idx2 = idx1+idx2-1
-        print*, idx1,idx2,optarg(idx1:idx2-1)
         nidx = nidx + 1
         read(optarg(idx1:idx2-1),*) idxs(nidx)
       end do
       nidx = nidx + 1
-      print*, idx1
       read(optarg(idx1:),*) idxs(nidx)
       if (optarg(1:1)=='c') then
-        ncol = nidx
-        allocate(trans, source=results(idxs(:nidx),:))
-        deallocate(results)
-        allocate(results, source=trans)
-        deallocate(trans)
+        call redefine_array(source=results(idxs(:nidx),:))
         colnames(1:ncol)=colnames(idxs(:nidx))
       else
-        nrow = nidx
-        allocate(trans, source=results(:,idxs(:nidx)))
-        deallocate(results)
-        allocate(results, source=trans)
-        deallocate(trans)
+        call redefine_array(source=results(:,idxs(:nidx)))
         rownames(1:nrow)=rownames(idxs(:nidx))
       end if
     end if
+
+  end subroutine
+
+  subroutine groupby()
+    integer  :: ngroup, ig1
+    character(30)   :: colname
+
+    read(optarg, *) colname, func
+    icol = get_idxcol(colname)
+    call mrgref(results(icol,:), rowindex(1:nrow))
+    results=results(:,rowindex(1:nrow))
+    allocate(trans, source=results)
+    ig1 = 1
+    ngroup = 0
+    do irow = 2, nrow
+      if (results(icol,irow) /= results(icol,irow-1)) then
+        ngroup = ngroup + 1
+        select case (trim(func))
+        case ('sum')
+          trans(:, ngroup) = sum(results(:,ig1:irow-1), 2)
+          trans(icol, ngroup) = results(icol,ig1)
+        case ('mean')
+          trans(:, ngroup) = sum(results(:,ig1:irow-1), 2) / (irow - ig1)
+        case ('max')
+          trans(:, ngroup) = maxval(results(:,ig1:irow-1), 2)
+        case ('min')
+          trans(:, ngroup) = minval(results(:,ig1:irow-1), 2)
+        end select
+        trans(icol, ngroup) = results(icol,ig1)
+        ig1 = irow
+      end if
+    end do
+    ngroup = ngroup + 1
+    select case (trim(func))
+    case ('sum')
+      trans(:, ngroup) = sum(results(:,ig1:irow-1), 2)
+      trans(icol, ngroup) = results(icol,ig1)
+    case ('mean')
+      trans(:, ngroup) = sum(results(:,ig1:irow-1), 2) / (irow - ig1)
+    case ('max')
+      trans(:, ngroup) = maxval(results(:,ig1:irow-1), 2)
+    case ('min')
+      trans(:, ngroup) = minval(results(:,ig1:irow-1), 2)
+    end select
+    trans(icol, ngroup) = results(icol,ig1)
+
+    call redefine_array(trans(:, :ngroup))
+    deallocate(trans)
   end subroutine
 
   subroutine applyfunc()
   integer itmp
+  read(optarg, *) func
+  call to_lower(func)
   if (trim(func)=='abs'  )    then; results = abs     (results); else &
   if (trim(func)=='exp'  )    then; results = exp     (results); else &
   if (trim(func)=='log10')    then; results = log10   (results); else &
@@ -333,11 +453,12 @@ program arraymath
   if (trim(func)=='matinv')   then; call matinv(results)       ; else &
   if (trim(func)=='fraction') then; results = fraction(results); else &
   if (trim(func)=='diff1')    then; do itemp=2, nrow; results(:,itemp) = results(:,itemp)-results(:,1); end do; results(:,1)=0; else &
-  if (trim(func)=='diff')     then; results(:,2:nrow) = results(:,2:nrow)-results(:,1:nrow-1);results(:, 1)=0; else &
+  if (trim(func)=='diff')     then; results(:,2:nrow) = results(:,2:nrow)-results(:,1:nrow-1); else &
   if (trim(func)=='cbrt' )    then; results = sign(abs(results)**(1.0/3.0), results); else &
   if (trim(func)=='max'  )    then; nrow=1; results(:, 1)=maxval(results, 2); else &
   if (trim(func)=='min'  )    then; nrow=1; results(:, 1)=minval(results, 2); else &
   if (trim(func)=='sum'  )    then; nrow=1; results(:, 1)=sum  (results, 2); else &
+  if (trim(func)=='cumsum')   then; call cumsum()              ; else &
   if (trim(func)=='mean' )    then; nrow=1; results(:, 1)=sum(results, 2)/size(results, 2); else &
   if (trim(func)=='sort' .or. trim(func)=='sortr' .or. trim(func)=='sortrow')    then
     call mrgref(rownames(1:nrow), rowindex(1:nrow))
@@ -350,12 +471,7 @@ program arraymath
     results=results(rowindex(1:ncol),:)
   else &
   if (trim(func)=='transpose')then
-    allocate(trans, source=transpose(results)); deallocate(results); allocate(results(nrow,ncol)); results=trans; deallocate(trans)
-    allocate(trans, source=transpose(array))  ; deallocate(array)  ; allocate(array(nrow,ncol))  ; array=trans  ; deallocate(trans)
-    allocate(trans, source=transpose(multi))  ; deallocate(multi)  ; allocate(multi(nrow,ncol))  ; multi=trans  ; deallocate(trans)
-    itemp = nrow
-    nrow = ncol
-    ncol = itemp
+    call redefine_array(source=transpose(results))
     tmpnames=rownames
     rownames=colnames
     colnames=tmpnames
@@ -365,6 +481,24 @@ program arraymath
   else
     call perror('Unknown function: '//trim(func))
   end if
+  end subroutine
+
+  subroutine cumsum()
+    integer :: i
+    do i = 2, nrow
+      results(:,i) = results(:,i-1) + results(:,i)
+    end do
+  end subroutine
+
+  subroutine redefine_array(source)
+    real  :: source(:,:)
+    real, allocatable :: rt1(:,:)
+    allocate(rt1, source=source)
+    deallocate(results)
+    allocate(results, source=rt1)
+    deallocate(rt1)
+    ncol = ubound(results, dim=1)
+    nrow = ubound(results, dim=2)
   end subroutine
 
   subroutine matinv(matA)
@@ -432,7 +566,7 @@ program arraymath
     print "(A)", '     nint:      rounds the array to the nearest whole number.'
     print "(A)", '     floor:     returns the greatest integer less than or equal to the array.'
     print "(A)", '     inverse:   computes the reciprocal of each element in the array.'
-    print "(A)", '     minv:      computes the matrix inverse of the array, using the LU factorization.'
+    print "(A)", '     matinv:    computes the matrix inverse of the array, using the LU factorization.'
     print "(A)", '     fraction:  returns the fractional part of the model representation of the array.'
     print "(A)", '     diff1:     subtract the first row from the array.'
     print "(A)", '     diff:      calculates the difference of each row and its previous row: row_i - row_(i-1).'
@@ -440,6 +574,7 @@ program arraymath
     print "(A)", '     max:       calculates the maximum values for each columns.'
     print "(A)", '     min:       calculates the minimum values for each columns.'
     print "(A)", '     sum:       adds the elements along each columns.'
+    print "(A)", '     cumsum:    computes the cumulatice sum along each columns.'
     print "(A)", '     mean:      calculates the average for each columns.'
     print "(A)", '     transpose: transposes the array.'
     print "(A)", '     sort:      sorts array by row names.'
