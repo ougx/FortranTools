@@ -1,6 +1,6 @@
 module rotation
 double precision      :: rotmat(3,3)
-double precision      :: ang1,ang2,ang3,anis1,anis2
+double precision      :: ang1=0d0,ang2=0d0,ang3=0d0,anis1=1d0,anis2=1d0
 contains
 subroutine setrot()
 

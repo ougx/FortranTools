@@ -1,6 +1,6 @@
 ! Created by Michael Ou
-! TODO: drifts
-program ppsgs
+! sequential indicator kriging
+program ppsis
   use f90getopt
   !use m_mrgref
   use m_inssor
@@ -20,25 +20,25 @@ program ppsgs
   character(1024) :: obsfile, obsfile2, gridfile, facfile, outfile, randpath, samfile, fomt
   character(len=2)  :: opt
   ! inputs
-  integer         :: ndim, nobs, ngrid, ndrift, nmax, seed, unbias, nobs2, nmax2, nsim
+  integer         :: ndim, nind, nobs, ngrid, ndrift, nmax, seed, unbias, nobs2, nmax2, nsim
   double precision            :: maxdist, vmin, vmax, std, avg
-  integer, allocatable :: irandpath(:), iobs(:), igrid(:), iobs2(:)
-  double precision, allocatable :: obs(:,:), obs2(:,:), grid(:,:), obsdrift(:,:), griddrift(:,:) ! coordinates and values, variance
+  integer, allocatable :: irandpath(:), iobs(:), igrid(:), iobs2(:), mobs(:)
+  double precision, allocatable :: obs(:,:,:), obs2(:,:), grid(:,:), obsdrift(:,:,:), griddrift(:,:) ! coordinates and values, variance
   double precision, allocatable :: samples(:)
-  type(variog)     :: vario, varioc, vario2
+  type(variog), allocatable(:)     :: vario(:), varioc(:), vario2
+
   ! local
   integer         :: matsize, npp, npp1, npp1o, npp1g, npp2, nppd, nppdu, mgrid
-  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim
-  double precision            :: cov0(3)
+  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim, ivario, ivarioc, iobs1, iind
   double precision, allocatable :: oodist(:,:), ogdist(:,:), ggdist(:,:), oodist2(:,:), ogdist2(:,:), coodist(:,:), tmpdist(:)
-  double precision, allocatable :: weights(:), matA(:,:), rhsB(:), obsval(:)
+  double precision, allocatable :: weights(:), matA(:,:), rhsB(:), obsval(:), cov0(:,:)
   integer, allocatable :: inear(:), inear2(:)
   logical         :: correct_weight, verbose
 
 
   allocate(opts, source=(/&
-    option_s("dim"    ,  "d", 5, "space dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
-    option_s("obsfile",  "o", 1, "observation data file. the columns should be x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used."), &
+    option_s("dim"    ,  "d", 6, "space dimension; number of indicator; number of observations for each indicator, split by comma; number of grid; number of covariate observation. number of drifts."), &
+    option_s("obsfile",  "o", 1, "observation data file. the columns should be x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used. This should be repeated for number of indicators."), &
     option_s("facfile",  "f", 1, "interpolation factor file. the columns should be gindex,nobs,iobs1,iobs2... in that file."), &
     option_s("gridfile", "g", 1, "grid file. the columns should be x,(y,z) in that file. drift value columns can be added if drift is used."), &
     option_s("randpath", "r", 1, "a file contain the indices of the random path, if not defined, the random path will be generated"), &
@@ -54,9 +54,9 @@ program ppsgs
     option_s("ang3",    "a3", 1, "set third rotation angle; default is 0."), &
     option_s("anis1",   "s1", 1, "set first anisotropy ratio; default is 1."), &
     option_s("anis2",   "s2", 1, "set second anisotropy ratio; default is 1."), &
-    option_s("vario",    "v", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin."), &
+    option_s("vario",    "v", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin. This should be repeated for the number of indicators."), &
     option_s("vario2",  "v2", 4, "set variogram for the secondary covariate."), &
-    option_s("varioc",  "vc", 4, "set cross-variogram between the primary and secondary variables."), &
+    option_s("varioc",  "vc", 4, "set cross-variogram between the primary and secondary variables. This should be repeated for the number of indicators."), &
     option_s("bounds",  "bs", 2, "set the lower and upper bounds, if not set, the simulation is unbounded."), &
     option_s("maxdist", "md", 1, "set the maximum distance for search, this is the rotated/anisotropic distance if there is rotation/anisotropy."), &
     option_s("correct",  "c", 0, "apply weight correction. default is no weight correction."), &
@@ -95,15 +95,9 @@ program ppsgs
   vmin = -verylarge
   vmax =  verylarge
   verbose = .false.
-  ! check if verbose is set
-  do
-    opt = getopt(opts)
-    if (trim(trim(opt)) == 'vb') then
-      verbose=.true.
-      exit
-    end if
-  end do
-  call reset_opt()
+  ivario = 0
+  ivarioc =0
+  iobs1 = 0
   do
     opt = getopt(opts)
     select case(trim(opt))
@@ -113,23 +107,28 @@ program ppsgs
         exit
 
       case( "d")
-        read(optarg, *) ndim, nobs, ngrid, nobs2, ndrift
+        read(optarg, *) ndim, nind, nobs, ngrid, nobs2, ndrift
         allocate(irandpath(ngrid))
-        allocate(obs(ndim+1, nobs))     ! coordinates plus values
+        allocate(obs(ndim+1, nobs, nind))     ! coordinates plus values
         allocate(iobs(nobs))
         allocate(grid(ndim+1, ngrid))   ! coordinates plus values
         allocate(igrid(ngrid))
         allocate(samples(ngrid))
+        allocate(vario(nind))
+        allocate(cov0(3,nind))
+        allocate(mobs(nind))            ! number of observations for each indicator; nobs is the maximum number
         if (nobs2>0) then
           allocate(obs2(ndim+1, nobs2)) ! coordinates plus values
           allocate(iobs2(nobs2))
+          allocate(varioc(nind), vario2)
         end if
         if (ndrift>0) then
           allocate(griddrift(ndrift, ngrid))
-          allocate(obsdrift (ndrift, nobs))
+          allocate(obsdrift (ndrift, nobs, nind))
         end if
+        mobs = nobs
 
-      case( "o"); read(optarg, *) obsfile;  call readobs(1)
+      case( "o"); iobs1=iobs1+1; read(optarg, *)  obsfile; call readobs(1)
 
       case("o2"); read(optarg, *) obsfile2; if (nobs2>0) call readobs(2)
 
@@ -160,9 +159,9 @@ program ppsgs
       case("bs"); read(optarg, *) vmin, vmax
       case("md"); read(optarg, *) maxdist
 
-      case( "v"); read(optarg, *) vario ; cov0(1:1) = covfuc(vario , [ zero ])
-      case("vc"); read(optarg, *) varioc; cov0(2:2) = covfuc(varioc, [ zero ])
-      case("v2"); read(optarg, *) vario2; cov0(3:3) = covfuc(vario2, [ zero ])
+      case( "v"); ivario =ivario+1 ; read(optarg, *) vario(ivario) ; cov0(1:1, ivario) = covfuc(vario , [ zero ])
+      case("vc"); ivarioc=ivarioc+1; read(optarg, *) varioc(ivario); cov0(2:2, ivarioc) = covfuc(varioc, [ zero ])
+      case("v2"); read(optarg, *) vario2; cov0(3:3,:) = covfuc(vario2, [ zero ])(0)
 
       case("fm"); read(optarg, *) fomt
 
@@ -177,8 +176,11 @@ program ppsgs
   if (ndrift==-1) call perr("  Error: Dimension needs to be defined as the first argument")
 
   ! set up random seed
-  call random_seed_initialize(seed)
-  call set_samples()
+  if (nsim>0) then
+    call random_seed_initialize(seed)
+    call set_samples()
+  end if
+
   if (nobs2>0) then
     if (nmax2 == 0) nmax2 = nmax
     if (nmax2 > nobs2) nmax2 = nobs2
@@ -197,65 +199,34 @@ program ppsgs
     npp2 = 0
   end if
 
-  if (gridfile == '') then
-    ! read the factors from file
-    if (verbose) print*, 'Reading factors in "'//trim(facfile)//'"'
-    allocate(obsval(nobs+ngrid-1))
-    open(newunit=ifilefac, file=trim(facfile), status='old')
-    read(ifilefac, *)
-    do ig = 1, ngrid
-      read(ifilefac, *) irandpath(ig), npp1o, npp1g, npp2, std,           &
-        (inear(ii)     , weights(ii),            ii=      1,npp1o      ), &
-        (inear(ii)     , weights(ii),            ii=npp1o+1,npp1o+npp1g), &
-        (inear2(ii)    , weights(npp1o+npp1g+ii),ii=      1,npp2)
-      npp1 = npp1o + npp1g
-      npp  = npp1 + npp2
-      ! TODO: put the value back to the ordered grid
-      obsval(      1:npp1o)  = obs (ndim+1, inear (      1:npp1o))
-      obsval(npp1o+1:npp1 )  = grid(ndim+1, irandpath(inear (npp1o+1:npp1 )))
-      obsval(npp1 +1:npp  )  = obs2(ndim+1, inear2(      1:npp2 ))
-      avg = sum(obsval(1:npp1)) / npp1      ! the average of obs1 and grid
-      obsval(1:npp) = obsval(1:npp) - avg
-      kk = irandpath(ig)
-      grid(ndim+1, kk) = sum(weights(1:npp) * obsval(1:npp)) + avg
-      grid(ndim+1, kk) = grid(ndim+1, kk) + samples(ig) * std
-      if (grid(ndim+1, kk) < vmin) grid(ndim+1, kk) = vmin
-      if (grid(ndim+1, kk) > vmax) grid(ndim+1, kk) = vmax
-    end do
-    !if (nsim==0) then
-      call write_output(grid(ndim+1, :))
-    !else
-    !  ! put back in correct order
-    !  call mrgref(irandpath, inear(1:ngrid))
-    !  call write_output(grid(ndim+1, inear(1:ngrid)))
-    !end if
+  allocate(matA(matsize, matsize), rhsB(matsize), tmpdist(nobs+ngrid))
+
+  call setrot()
+  if (nsim>0) then
+    call set_randpath()
+    grid = grid(:, irandpath)
   else
-    ! Krige the factors
-    allocate(matA(matsize, matsize), rhsB(matsize), tmpdist(nobs+ngrid))
+    irandpath=[(ig, ig=1, ngrid)]
+  end if
 
-    call setrot()
-    if (nsim>0) then
-      call set_randpath()
-      grid = grid(:, irandpath)
-    else
-      irandpath=[(ig, ig=1, ngrid)]
-    end if
+  ! calculate distance
+  call setdist()
 
-    ! calculate distance
-    call setdist()
+  if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
+  open(newunit=ifilefac, file=trim(facfile), status='replace')
+  write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
 
-    if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
-    open(newunit=ifilefac, file=trim(facfile), status='replace')
-    write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
+  if (verbose) open (unit=6, carriagecontrol='fortran')
 
-    if (verbose) open (unit=6, carriagecontrol='fortran')
-    do ig = 1, ngrid
-
-      ! search for the nearest obs
-      if (verbose) call progress(real(ig)/real(ngrid))
-      ! already evaluated grid cells
-      mgrid = ig-1 ! minus 1 to exclude the cell itself
-      if (nsim==0) mgrid=0   ! if not a simulation, grid cell will be excluded as obs
+  grid: do ig = 1, ngrid
+    ! search for the nearest obs
+    if (verbose) call progress(real(ig)/real(ngrid))
+    ! already evaluated grid cells
+    mgrid = ig-1 ! minus 1 to exclude the cell itself
+    if (nsim==0) mgrid=0   ! if not a simulation, grid cell will be excluded as obs
+    ! evaluate probability at this cell for each indicator
+    indicator: do iind=1, nind
+      nobs = mobs(iind)
       if (nobs+mgrid>nmax) then
         tmpdist(1:nobs) = ogdist(:, ig)
         if (mgrid > 0) tmpdist(nobs+1:nobs+mgrid) = ggdist(1:mgrid, ig)
@@ -345,11 +316,11 @@ program ppsgs
         (inear(ii)     , weights(ii),     ii=      1,npp1o), &
         (inear(ii)-nobs, weights(ii),     ii=npp1o+1,npp1), &
         (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
-    end do
-    close(6)
-    close(ifilefac)
+    end do indicator ! indicator
+  end do grid ! grid
+  close(6)
+  close(ifilefac)
 
-  end if
   contains
 
   function linecount(afile)
@@ -410,13 +381,13 @@ program ppsgs
     integer                     :: idx_nearest(k)
     ! local
     double precision            :: vm
-    integer                     :: imax, i
+    integer                     :: imax, ii
     idx_nearest = [(ii,ii=1, k)]
     imax = maxloc(dist(:k), dim=1)
     vm = dist(imax)
-    do i = k+1, n
+    do ii = k+1, n
       if(dist(ii)<vm) then
-        idx_nearest(imax) = i
+        idx_nearest(imax) = ii
         imax = maxloc(dist(idx_nearest), dim=1)
         vm = dist(idx_nearest(imax))
       end if
@@ -437,7 +408,9 @@ program ppsgs
       else
         read(ifile,*, iostat=ioerr) idx(ii), arr(:, ii)
       end if
+      if (ioerr<0) exit ! end of file
     end do
+    nn = ii
     close(ifile)
   end subroutine readdata
 
@@ -469,13 +442,13 @@ program ppsgs
       if (verbose) print*, 'Reading OBS in "'//trim(obsfile)//'"'
       if (nobs==0) nobs = linecount(obsfile) - 1
       if (ndrift>0) then
-        call readdata(obsfile, nobs, iobs, obs, obsdrift)
+        call readdata(obsfile, mobs(iobs1), iobs, obs(:,:,iobs1), obsdrift(:,:,iobs1))
       else
-        call readdata(obsfile, nobs, iobs, obs)
+        call readdata(obsfile, mobs(iobs1), iobs, obs)
       end if
     else
       if (verbose) print*, 'Reading covariate OBS in "'//trim(obsfile2)//'"'
-      if (nobs2==0) nobs2 = linecount(obsfile2) - 1
+      if (nobs2==0) nobs2 = linecount(obsfile) - 1
       call readdata(obsfile2, nobs2, iobs2, obs2)
     end if
   end subroutine readobs
@@ -500,12 +473,8 @@ program ppsgs
         if (verbose) print*, 'No simulation. All samples are set to 0.'
         samples = 0.0d0
       else
-        if (verbose) print*, 'Generating samples'
-        call r8vec_normal_01 ( ngrid, samples )
-        open(newunit=ifile, file=trim(facfile)//'_sample', status='replace')
-        write(ifile, '(A)') 'sample'
-        do ii=1, ngrid; write(ifile, '(G0.10)') samples(ii); end do
-        close(ifile)
+        if (verbose) print*, 'Generating samples (uniform distribution)'
+        do ii=1, ngrid;  call random_number(samples(ii)); end do
       end if
     else
       if (verbose) print*, 'Reading samples in "'//trim(samfile)//'"'
@@ -515,13 +484,11 @@ program ppsgs
 
   ! calculate distance between obs and grid
   function cdist(coord1, coord2)
+    integer                       :: n1, n2
     double precision              :: coord1(:,:), coord2(:,:)
     double precision, allocatable :: cdist(:,:)
-    ! local
-    integer                       :: n1, n2
     n1 = size(coord1, dim=2)
     n2 = size(coord2, dim=2)
-
     allocate(cdist(n1,n2))
     do ii = 1, n1
       do jj = 1, n2
@@ -563,8 +530,8 @@ program ppsgs
 
   subroutine setdist()
     if (verbose) print*, 'Calculating distances ...'
-    oodist = pdist(obs (1:ndim, :))                         ! distance of primary variate ~ primary variate
-    if (nsim>0) ggdist = pdist(grid(1:ndim, :))             ! distance of grid ~ grid
+    oodist = pdist(obs(1:ndim, :))                          ! distance of primary variate ~ primary variate
+    ggdist = pdist(grid(1:ndim, :))                         ! distance of grid ~ grid
     ! print*, 'ggdist'
     ! print '(4(G0.12,x))', ggdist(1:4,1:4)
     ogdist = cdist(obs(1:ndim, :), grid(1:ndim, :))         ! distance of grid ~ primary variate

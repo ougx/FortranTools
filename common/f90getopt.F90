@@ -46,7 +46,7 @@ module f90getopt
 ! ------------------ Implicit -----------------------------------------------------------------------------------------------------
    IMPLICIT NONE
 ! ------------------ Local declarations -------------------------------------------------------------------------------------------
-   PUBLIC  :: getopt, option_s, optarg, isnum
+   PUBLIC  :: getopt, option_s, optarg, isnum, reset_opt
    PRIVATE ! all other are private (hidden)
 ! ------------------ Constant declarations ----------------------------------------------------------------------------------------
 
@@ -125,7 +125,9 @@ contains
         endif
     end function getopt
 
-
+    subroutine reset_opt()
+        optind = 1
+    end subroutine
     ! ----------------------------------------
 
     character(len=shortlen) function process_long( opts, arg )
