@@ -25,8 +25,8 @@ function c8_normal_01 ( )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
-  integer, parameter :: ck = kind ( ( 1.0D+00, 1.0D+00 ) )
+  integer, parameter :: rk = kind ( 1.0 ) ! D+00
+  integer, parameter :: ck = kind ( ( 1.0, 1.0 ) ) ! D+00
 
   complex ( kind = ck ) c8_normal_01
   real ( kind = rk ), parameter :: r8_pi = 3.141592653589793D+00
@@ -81,7 +81,7 @@ subroutine c8vec_normal_01 ( n, x )
   implicit none
 
   integer, parameter :: ck = kind ( ( 1.0D+00, 1.0D+00 ) )
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer n
 
@@ -182,7 +182,7 @@ function i4_normal_ab ( a, b )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   real ( kind = rk ) a
   real ( kind = rk ) b
@@ -221,7 +221,7 @@ subroutine i4_normal_ab_test ( )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer i
   !integer i4_normal_ab
@@ -279,7 +279,7 @@ function r8_normal_01 ( )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   real ( kind = rk ) r1
   real ( kind = rk ) r2
@@ -328,7 +328,7 @@ function r8_normal_ab ( a, b )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   real ( kind = rk ) a
   real ( kind = rk ) b
@@ -402,7 +402,7 @@ subroutine r8mat_normal_01 ( m, n, r )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer m
   integer n
@@ -471,7 +471,7 @@ subroutine r8mat_normal_ab ( m, n, a, b, r )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer m
   integer n
@@ -518,7 +518,7 @@ subroutine r8mat_print ( m, n, a, title )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer m
   integer n
@@ -566,7 +566,7 @@ subroutine r8mat_print_some ( m, n, a, ilo, jlo, ihi, jhi, title )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer, parameter :: incx = 5
   integer m
@@ -685,7 +685,7 @@ subroutine r8vec_normal_01 ( n, x )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer n
 
@@ -800,7 +800,7 @@ subroutine r8vec_normal_ab ( n, a, b, x )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer n
 
@@ -904,7 +904,7 @@ subroutine r8vec_print ( n, a, title )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer n
 
@@ -977,7 +977,7 @@ subroutine r8vec_uniform_01 ( n, r )
 !
   implicit none
 
-  integer, parameter :: rk = kind ( 1.0D+00 )
+  integer, parameter :: rk = kind ( 1.0e+00 )
 
   integer n
 

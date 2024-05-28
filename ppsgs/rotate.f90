@@ -1,6 +1,6 @@
 module rotation
-double precision      :: rotmat(3,3)
-double precision      :: ang1=0d0,ang2=0d0,ang3=0d0,anis1=1d0,anis2=1d0
+real      :: rotmat(3,3)
+real      :: ang1=0e0,ang2=0e0,ang3=0e0,anis1=1e0,anis2=1e0
 contains
 subroutine setrot()
 
@@ -26,8 +26,8 @@ subroutine setrot()
 !
 ! Author: C. Deutsch                                Date: September 1989
 !-----------------------------------------------------------------------
-double precision, parameter         :: DEG2RAD = 3.141592653589793d0/180.0d0, EPSLON = 1.d-10
-double precision                    :: alpha, beta, theta, &
+real, parameter         :: DEG2RAD = 3.141592653589793e0/180.0e0, EPSLON = 1.e-10
+real                    :: alpha, beta, theta, &
                                 sina, sinb, sint, cosa, cosb, cost, &
                                 afac1, afac2
 !
@@ -97,9 +97,9 @@ function rotated_dist(ndim, coord1, coord2)
 !
 ! Author: C. Deutsch                                Date: September 1989
 integer                 :: ndim
-double precision        :: coord1(ndim), coord2(ndim), rotated_dist
+real        :: coord1(ndim), coord2(ndim), rotated_dist
 integer                 :: i
-double precision        :: dd(ndim)
+real        :: dd(ndim)
 
 
 dd = coord1 - coord2

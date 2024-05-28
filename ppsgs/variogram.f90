@@ -1,20 +1,20 @@
 module variogram
   type variog
     character(3) :: vtype
-    double precision         :: range
-    double precision         :: sill
-    double precision         :: nugget
+    real         :: range
+    real         :: sill
+    real         :: nugget
   end type
 
   contains
 
   function covfuc(va, dist)
-    double precision, allocatable :: covfuc(:)
-    double precision              :: dist(:)
+    real, allocatable :: covfuc(:)
+    real              :: dist(:)
     type(variog)                  :: va
-    double precision, parameter   :: pi = 3.141592653589793d0
+    real, parameter   :: pi = 3.141592653589793e0
     integer                       :: i, n
-    double precision, allocatable :: hr(:)
+    real, allocatable :: hr(:)
 
     n = size(dist)
     allocate(covfuc(n))
@@ -32,6 +32,7 @@ module variogram
     case default; print*, 'Unknown variogram model.'; stop
     end select
 
+    covfuc = covfuc * va%sill
     if (va%nugget > 0) then
         where (dist==0) covfuc = covfuc + va%nugget
     end if

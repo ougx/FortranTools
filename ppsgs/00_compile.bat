@@ -1,5 +1,5 @@
 call ..\compiler_setting.bat
-
+del ppsgs.exe
 rem -freal-4-real-8
 %ff%  -o ppsgs sspsv.f rotate.f90 normal.f90 variogram.f90 ^
   ..\common\f90getopt.F90  ^
