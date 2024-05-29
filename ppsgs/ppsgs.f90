@@ -11,9 +11,9 @@ program ppsgs
   use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
 
-  real, parameter :: verysmall = tiny(1.0d0) * 1000
-  real, parameter :: verylarge = huge(1.0d0) * 1e-3
-  real, parameter :: zero = 0.0d0
+  real, parameter :: verysmall = tiny(1.0e0) * 1000
+  real, parameter :: verylarge = huge(1.0e0) * 1e-3
+  real, parameter :: zero = 0.0e0
 
   type(option_s), allocatable  :: opts(:)
 
@@ -266,8 +266,8 @@ program ppsgs
       !ogdist = cdist(obs(1:ndim, :), grid(1:ndim, ig:ig))         ! distance of grid ~ primary variate
       if (nobs+mgrid>nmax) then
         tmpdist(1:nobs) = ogdist(:, ig)
-        if (mgrid > 0) tmpdist(nobs+1:nobs+mgrid) = ggdist(1:mgrid, 1)
-        inear(1:nmax) = search_nearest(tmpdist(1:nobs+mgrid), nobs+mgrid, nmax)
+        if (mgrid > 0) tmpdist(nobs+1:nobs+mgrid) = ggdist(1:mgrid, ig)
+        inear(1:nmax) = search_smallest(tmpdist(1:nobs+mgrid), nobs+mgrid, nmax)
         npp1 = nmax
         npp1o = count(inear(1:npp1)<=nobs)
         npp1g = npp1 - npp1o
@@ -281,7 +281,7 @@ program ppsgs
 
       ! search for the nearest covariate
       if (nobs2>0 .and. nmax2<nobs2) then
-        inear2(1:nmax2) = search_nearest(ogdist2(:, ig), nobs2, nmax2)
+        inear2(1:nmax2) = search_smallest(ogdist2(:, ig), nobs2, nmax2)
       end if
 
       if (maxdist>0) then
@@ -412,21 +412,24 @@ program ppsgs
   end function scramble
 
   ! search for the k smallest values in an unsorted array, return the index of these numbers
-  function search_nearest(dist, n, k) result(idx_nearest)
-    integer                     :: n, k
-    real            :: dist(n)
-    integer                     :: idx_nearest(k)
+  function search_smallest(vals, n, nk) result(idx_small)
+    integer         :: n, nk
+    real            :: vals(n)
+    integer         :: idx_small(nk)
     ! local
-    real            :: vm
-    integer                     :: imax, i
-    idx_nearest = [(ii,ii=1, k)]
-    imax = maxloc(dist(:k), dim=1)
-    vm = dist(imax)
-    do i = k+1, n
-      if(dist(ii)<vm) then
-        idx_nearest(imax) = i
-        imax = maxloc(dist(idx_nearest), dim=1)
-        vm = dist(idx_nearest(imax))
+    real            :: valmax
+    integer         :: imax, k
+
+    idx_small = [(k,k=1, nk)]
+
+    imax = maxloc(vals(:nk), dim=1)
+    valmax = vals(imax)
+
+    do k = nk+1, n
+      if(vals(k)<valmax) then
+        idx_small(imax) = k
+        imax = maxloc(vals(idx_small), dim=1)
+        valmax = vals(idx_small(imax))
       end if
     end do
   end function
@@ -468,7 +471,7 @@ program ppsgs
     else
       call readdata(gridfile, ngrid, igrid, grid(1:ndim,:))
     end if
-    do ii =1, 5; print*, grid(:,ii); end do
+    !do ii =1, 5; print*, grid(:,ii); end do
   end subroutine readgrid
 
   subroutine readobs(ivar)
@@ -482,12 +485,12 @@ program ppsgs
       else
         call readdata(obsfile, nobs, iobs, obs)
       end if
-      do ii =1, 5; print*,obs(:,ii); end do
+      !do ii =1, 5; print*,obs(:,ii); end do
     else
       if (verbose) print*, 'Reading covariate OBS in "'//trim(obsfile2)//'"'
       if (nobs2==0) nobs2 = linecount(obsfile2) - 1
       call readdata(obsfile2, nobs2, iobs2, obs2)
-      do ii =1, 5; print*,obs2(:,ii); end do
+      !do ii =1, 5; print*,obs2(:,ii); end do
     end if
   end subroutine readobs
 
@@ -623,6 +626,7 @@ program ppsgs
       do ii =1, npp1
         write(ifile, "(I0)") inear(ii)
       end do
+      close(ifile)
       if (npp2>0) then
         open(newunit=ifile, file='index2.dat', status='replace')
         do ii =1, npp2
