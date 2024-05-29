@@ -26,7 +26,7 @@ subroutine setrot()
 !
 ! Author: C. Deutsch                                Date: September 1989
 !-----------------------------------------------------------------------
-real, parameter         :: DEG2RAD = 3.141592653589793e0/180.0e0, EPSLON = 1.e-10
+real, parameter         :: DEG2RAD = 4.0*atan(1.0)/180.0, EPSLON = 1.e-10
 real                    :: alpha, beta, theta, &
                                 sina, sinb, sint, cosa, cosb, cost, &
                                 afac1, afac2
@@ -74,41 +74,66 @@ rotmat(3,3) = afac2*(cost * cosb)
 
 end subroutine setrot
 
-function rotated_dist(ndim, coord1, coord2)
+subroutine print_rotmat(iout)
+integer, optional       :: iout
+integer                 :: iiout
+if (present(iout)) then
+    iiout=iout
+else
+    iiout=6
+end if
+write(iiout, *) ''
+write(iiout, *) 'Rotation matrix:'
+write(iiout, '(A,5F10.3)') ' Parameters:', ang1,ang2,ang3,anis1,anis2
+write(iiout, '(3F10.3)') rotmat
+write(iiout, *) ''
+end subroutine
 
-!
-!    Squared Anisotropic Distance Calculation Given Matrix Indicator
-!    ***************************************************************
-!
-! This routine calculates the anisotropic distance between two points
-!  given the coordinates of each point and a definition of the
-!  anisotropy.
-!
-! INPUT VARIABLES:
-!   coord1           Coordinates of first point
-!   coord2           Coordinates of second point
-!   rotmat           The rotation matrices
-!
-!
-! OUTPUT VARIABLES:
-!   dist           The distance accounting for the anisotropy
-!                      and the rotation of coordinates (if any).
-!
-!
-! Author: C. Deutsch                                Date: September 1989
-integer                 :: ndim
-real        :: coord1(ndim), coord2(ndim), rotated_dist
-integer                 :: i
-real        :: dd(ndim)
+function rotate(ndim, npnt, coord1, origin) result(coord2)
 
+integer                 :: npnt, ndim
+real                    :: coord1(ndim, npnt)
+real                    :: coord2(ndim, npnt)
+real, optional          :: origin(ndim)
+! local
+integer                 :: idim, ipnt
+if (present(origin)) then
+  do ipnt=1, npnt
+    coord1(:,ipnt) = coord1(:,ipnt) - origin
+  end do
+end if
 
-dd = coord1 - coord2
-
-rotated_dist = 0.0
-do i=1, ndim
-    rotated_dist = rotated_dist + sum((rotmat(1:ndim,i) * dd))**2
+!print*, 'rotate', coord1
+do idim=1, ndim
+    coord2(idim,:) = [(sum(coord1(:,ipnt) * rotmat(idim, 1:ndim)), ipnt=1, npnt)]
 end do
-rotated_dist = rotated_dist ** 0.5
+end function
 
-end function rotated_dist
+function rotated_dist(ndim, coord1, coord2) result(res)
+
+    !
+    !    Squared Anisotropic Distance Calculation Given Matrix Indicator
+    !    ***************************************************************
+    !
+    ! This routine calculates the anisotropic distance between two points
+    !  given the coordinates of each point and a definition of the
+    !  anisotropy.
+    !
+    ! INPUT VARIABLES:
+    !   coord1           Coordinates of first point
+    !   coord2           Coordinates of second point
+    !   rotmat           The rotation matrices
+    !
+    !
+    ! OUTPUT VARIABLES:
+    !   dist           The distance accounting for the anisotropy
+    !                      and the rotation of coordinates (if any).
+    !
+    !
+    ! Author: C. Deutsch                                Date: September 1989
+    integer                 :: ndim
+    real                    :: coord1(ndim), coord2(ndim), res
+
+    res = sqrt(sum(rotate(ndim, 1, coord1, coord2) ** 2))
+end function
 end module

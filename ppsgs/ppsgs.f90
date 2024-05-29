@@ -267,7 +267,7 @@ program ppsgs
       if (nobs+mgrid>nmax) then
         tmpdist(1:nobs) = ogdist(:, ig)
         if (mgrid > 0) tmpdist(nobs+1:nobs+mgrid) = ggdist(1:mgrid, 1)
-        inear(1:nmax) = search_nearest(tmpdist(1:nobs+mgrid), nobs+mgrid, nmax)
+        inear(1:nmax) = search_smallest(tmpdist(1:nobs+mgrid), nobs+mgrid, nmax)
         npp1 = nmax
         npp1o = count(inear(1:npp1)<=nobs)
         npp1g = npp1 - npp1o
@@ -281,7 +281,7 @@ program ppsgs
 
       ! search for the nearest covariate
       if (nobs2>0 .and. nmax2<nobs2) then
-        inear2(1:nmax2) = search_nearest(ogdist2(:, ig), nobs2, nmax2)
+        inear2(1:nmax2) = search_smallest(ogdist2(:, ig), nobs2, nmax2)
       end if
 
       if (maxdist>0) then
@@ -412,21 +412,25 @@ program ppsgs
   end function scramble
 
   ! search for the k smallest values in an unsorted array, return the index of these numbers
-  function search_nearest(dist, n, k) result(idx_nearest)
-    integer                     :: n, k
-    real            :: dist(n)
-    integer                     :: idx_nearest(k)
+  function search_smallest(vals, n, nk) result(idx_nearest)
+    integer         :: n, nk
+    real            :: vals(n)
+    integer         :: idx_nearest(nk)
     ! local
-    real            :: vm
-    integer                     :: imax, i
-    idx_nearest = [(ii,ii=1, k)]
-    imax = maxloc(dist(:k), dim=1)
-    vm = dist(imax)
-    do i = k+1, n
-      if(dist(ii)<vm) then
-        idx_nearest(imax) = i
-        imax = maxloc(dist(idx_nearest), dim=1)
-        vm = dist(idx_nearest(imax))
+    real            :: valmax
+    integer         :: imax, k
+
+    idx_nearest = [(k,k=1, nk)]
+
+    imax = maxloc(vals(:nk), dim=1)
+    valmax = vals(imax)
+
+    do k = nk+1, n
+      if(vals(k)<valmax) then
+        ! print "(I10,12F10.1)", k,vals(k),valmax,vals(idx_nearest)
+        idx_nearest(imax) = k
+        imax = maxloc(vals(idx_nearest), dim=1)
+        valmax = vals(idx_nearest(imax))
       end if
     end do
   end function
