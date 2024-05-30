@@ -1,6 +1,7 @@
 module rotation
 real      :: rotmat(3,3)
 real      :: ang1=0e0,ang2=0e0,ang3=0e0,anis1=1e0,anis2=1e0
+logical   :: scaling
 contains
 subroutine setrot()
 
@@ -41,6 +42,14 @@ real                    :: alpha, beta, theta, &
 !         theta   Angle of rotation of minor axis about the major axis
 !                 of the ellipsoid.
 !
+scaling = abs(anis1-1.0e0)>EPSLON .or. abs(anis2-1.0e0)>EPSLON
+if(.not. scaling) then
+    ! print*, "no scaling is needed"
+    rotmat(:,1) = [1.0, 0.0, 0.0]
+    rotmat(:,2) = [0.0, 1.0, 0.0]
+    rotmat(:,3) = [0.0, 0.0, 1.0]
+    return
+end if
 if(ang1.ge.0.0.and.ang1.lt.270.0) then
     alpha = (90.0   - ang1) * DEG2RAD
 else
@@ -97,16 +106,21 @@ real                    :: coord2(ndim, npnt)
 real, optional          :: origin(ndim)
 ! local
 integer                 :: idim, ipnt
+! print "(2F10.2)", coord1
 if (present(origin)) then
   do ipnt=1, npnt
-    coord1(:,ipnt) = coord1(:,ipnt) - origin
+    coord2(:,ipnt) = coord1(:,ipnt) - origin
   end do
+else
+    coord2 = coord1
 end if
 
-!print*, 'rotate', coord1
-do idim=1, ndim
-    coord2(idim,:) = [(sum(coord1(:,ipnt) * rotmat(idim, 1:ndim)), ipnt=1, npnt)]
-end do
+! print "(2F10.2)", coord2
+if (scaling) then
+    do idim=1, ndim
+        coord2(idim,:) = [(sum(coord2(:,ipnt) * rotmat(idim, 1:ndim)), ipnt=1, npnt)]
+    end do
+end if
 end function
 
 function rotated_dist(ndim, coord1, coord2) result(res)

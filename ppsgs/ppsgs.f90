@@ -7,15 +7,18 @@ program ppsgs
   use rotation
   use normal_dist
   use variogram
+  use kdtree2_module
   use ieee_arithmetic
   use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
 
-  real, parameter :: verysmall = tiny(1.0d0) * 1000
-  real, parameter :: verylarge = huge(1.0d0) * 1e-3
-  real, parameter :: zero = 0.0d0
+  real, parameter :: verysmall = tiny(1.0e0) * 1000
+  real, parameter :: verylarge = huge(1.0e0) * 1e-3
+  real, parameter :: zero = 0.0e0
 
-  type(option_s), allocatable  :: opts(:)
+  type(kdtree2),  pointer           :: obstree, obstree2
+  type(option_s), allocatable       :: opts(:)
+  type(kdtree2_result), allocatable :: kdnearest(:),kdnearest2(:)
 
   character(1024) :: obsfile, obsfile2, gridfile, facfile, outfile, randpath, samfile, fomt
   character(len=2)  :: opt
@@ -23,14 +26,16 @@ program ppsgs
   integer         :: ndim, nobs, ngrid, ndrift, nmax, seed, unbias, nobs2, nmax2, nsim
   real            :: maxdist, vmin, vmax, std, avg
   integer, allocatable :: irandpath(:), iobs(:), igrid(:), iobs2(:)
-  real, allocatable :: obs(:,:), obs2(:,:), grid(:,:), obsdrift(:,:), griddrift(:,:) ! coordinates and values, variance
+  logical, allocatable :: kdmask(:)
+  real, allocatable ::  obs(:,:),  obs2(:,:),  grid(:,:), obsdrift(:,:), griddrift(:,:) ! coordinates and values, variance
+  real, allocatable :: robs(:,:), rob2(:,:)                                ! rotated, coordinates for search and variogram
   real, allocatable :: samples(:)
   type(variog)     :: vario, varioc, vario2
   ! local
   integer         :: matsize, npp, npp1, npp1o, npp1g, npp2, nppd, nppdu, mgrid
   integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim
   real            :: cov0(3)
-  real, allocatable :: oodist(:,:), ogdist(:,:), ggdist(:,:), oodist2(:,:), ogdist2(:,:), coodist(:,:), tmpdist(:)
+  real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:)
   real, allocatable :: weights(:), matA(:,:), rhsB(:), obsval(:)
   integer, allocatable :: inear(:), inear2(:)
   logical         :: correct_weight, verbose
@@ -39,7 +44,7 @@ program ppsgs
   allocate(opts, source=(/&
     option_s("dim"    ,  "d", 5, "space dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
     option_s("obsfile",  "o", 1, "observation data file. the columns should be x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used."), &
-    option_s("facfile",  "f", 1, "interpolation factor file. the columns should be gindex,nobs,iobs1,iobs2... in that file."), &
+    option_s("facfile",  "f", 1, "interpolation factor file. the columns should be gindex,nobs,iobs1,iobs2... in that file. This file will be generated using this tool when grid file is defined."), &
     option_s("gridfile", "g", 1, "grid file. the columns should be x,(y,z) in that file. drift value columns can be added if drift is used."), &
     option_s("randpath", "r", 1, "a file contain the indices of the random path, if not defined, the random path will be generated"), &
     option_s("samfile",  "s", 1, "a file contain samples from standard normal distribution."), &
@@ -177,32 +182,26 @@ program ppsgs
   end do
   if (ndrift==-1) call perr("  Error: Dimension needs to be defined as the first argument")
 
-  print*, cov0
   ! set up random seed
   call random_seed_initialize(seed)
   call set_samples()
   if (nobs2>0) then
     if (nmax2 == 0) nmax2 = nmax
     if (nmax2 > nobs2) nmax2 = nobs2
+  else
+    nmax2 = 0
   end if
   if (nmax>nobs+ngrid-1) nmax=nobs+ngrid-1
 
-  matsize = nmax+unbias+ndrift+nmax2
-  allocate(weights(matsize))
-
-  allocate(inear(nobs+ngrid))
-  if (nobs2>0) then
-    allocate(inear2(nobs2))
-    inear2 = [(ii,ii=1,nobs2)]
-    npp2 = nmax2
-  else
-    npp2 = 0
-  end if
-
   if (gridfile == '') then
     ! read the factors from file
-    if (verbose) print*, 'Reading factors in "'//trim(facfile)//'"'
+    if (verbose) print*, 'Estimating values using factors in "'//trim(facfile)//'"'
+    allocate(inear (nobs+ngrid-1))
     allocate(obsval(nobs+ngrid-1))
+    allocate(weights(nobs+ngrid+nobs2-1))
+    if (nobs2>0) then
+      allocate(inear2(nobs2-1))
+    end if
     open(newunit=ifilefac, file=trim(facfile), status='old')
     read(ifilefac, *)
     do ig = 1, ngrid
@@ -225,7 +224,7 @@ program ppsgs
       if (grid(ndim+1, kk) > vmax) grid(ndim+1, kk) = vmax
     end do
     !if (nsim==0) then
-      call write_output(grid(ndim+1, :))
+    call write_output()
     !else
     !  ! put back in correct order
     !  call mrgref(irandpath, inear(1:ngrid))
@@ -233,7 +232,10 @@ program ppsgs
     !end if
   else
     ! Krige the factors
-    allocate(matA(matsize, matsize), rhsB(matsize), tmpdist(nobs+ngrid))
+    matsize = nmax+unbias+ndrift+nmax2
+    allocate(weights(matsize))
+    allocate(matA(matsize, matsize), rhsB(matsize), kdnearest(nmax))
+    if (nobs2>0) allocate(kdnearest2(nmax2))
 
     call setrot()
     if (nsim>0) then
@@ -246,9 +248,11 @@ program ppsgs
     ! calculate distance
     call setdist()
 
-    if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
-    open(newunit=ifilefac, file=trim(facfile), status='replace')
-    write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
+    if (facfile/='') then
+      if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
+      open(newunit=ifilefac, file=trim(facfile), status='replace')
+      write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
+    end if
 
     if (verbose) open (unit=6, carriagecontrol='fortran')
     do ig = 1, ngrid
@@ -258,46 +262,64 @@ program ppsgs
       ! already evaluated grid cells
       mgrid = ig-1 ! minus 1 to exclude the cell itself
       if (nsim==0) then
-        mgrid=0   ! if not a simulation, grid cell will be excluded as obs
+        mgrid=0   ! if not a simulation, grid cell will not be included as obs
       else
-        ! ggdist = cdist(grid(1:ndim, :), grid(1:ndim, ig:ig))             ! distance of grid ~ grid
+        kdmask(nobs+mgrid) = .true.
       end if
-
-      !ogdist = cdist(obs(1:ndim, :), grid(1:ndim, ig:ig))         ! distance of grid ~ primary variate
+      
+      xcell = robs(:ndim,nobs+ig) 
       if (nobs+mgrid>nmax) then
-        tmpdist(1:nobs) = ogdist(:, ig)
-        if (mgrid > 0) tmpdist(nobs+1:nobs+mgrid) = ggdist(1:mgrid, 1)
-        inear(1:nmax) = search_smallest(tmpdist(1:nobs+mgrid), nobs+mgrid, nmax)
+        ! print*, ig, 'search for neighbor1'
+        call kdtree2_n_nearest(obstree,xcell,nmax,kdnearest,kdmask)
+        inear = kdnearest%idx
         npp1 = nmax
         npp1o = count(inear(1:npp1)<=nobs)
         npp1g = npp1 - npp1o
+        call inssor(inear(1:npp1))
       else
         ! use all points
         npp1o = nobs
         npp1g = mgrid
         npp1 = nobs + mgrid
-        inear(1:npp1) = [(ii,ii=1,npp1)]
+        inear = [(ii,ii=1,npp1)]
       end if
 
-      ! search for the nearest covariate
-      if (nobs2>0 .and. nmax2<nobs2) then
-        inear2(1:nmax2) = search_smallest(ogdist2(:, ig), nobs2, nmax2)
+      if (nobs2>0) then
+        if (nmax2<nobs2) then
+          ! print*, ig, 'search for neighbor2'
+          npp2 = nmax2
+          call kdtree2_n_nearest(obstree2,xcell,nmax2,kdnearest2)
+          inear2 = kdnearest2%idx
+        else
+          npp2 = nobs2
+          inear2 = [(ii,ii=1,npp2)]
+        end if
+      else
+        npp2 = 0
       end if
 
+      tmpdist               = sdistn1(robs(:,inear ) ,robs(:,nobs+ig))
+      if (nobs2>0) tmpdist2 = sdistn1(rob2(:,inear2) ,robs(:,nobs+ig))
+
+      ! calculate the distance from the unknown grid cell to all data points
       if (maxdist>0) then
-        npp   = count(tmpdist(inear(1:npp1))<=maxdist)
+        npp   = count(tmpdist<=maxdist)
         if (npp /= npp1) then
-          npp1 = npp
-          npp1o = count(inear(1:npp1)<=nobs)
+          inear   = pack(inear, tmpdist<=maxdist)
+          tmpdist = pack(tmpdist, tmpdist<=maxdist)
+          npp1  = npp
+          npp1o = count(inear<=nobs)
           npp1g = npp1 - npp1o
         end if
-        npp   = count(ogdist2(inear2(1:npp2), ig)<=maxdist)
-        if (npp /= npp2) then
-          npp2 = npp
+        if (nobs2>0) then
+          npp   = count(tmpdist2<=maxdist)
+          if (npp /= npp2) then
+            inear2 = pack(inear2, tmpdist2<=maxdist)
+            tmpdist2 = pack(tmpdist2, tmpdist2<=maxdist)
+            npp2 = npp
+          end if
         end if
       end if
-
-      call inssor(inear(1:npp1))
 
       npp = npp1 + npp2       ! total obs points
       nppd  = npp + ndrift    ! obs points + drifts
@@ -306,41 +328,40 @@ program ppsgs
       ! construct linear system
       matA = 0.0
       rhsB = 0.0
-
+      ! print "(99I9)", nobs, nobs2, ngrid, nmax2, npp2, npp1o, npp2, ndrift, unbias
+      ! print*, 'start to build matrix', sdistn1(robs(:,inear (1+1:npp1o)  ), robs(:,1))
       ! obs1
       do ii=1, npp1o
         kk = inear(ii)
-        matA(ii, ii)         = cov0(1)                                                                   ! diagonal
-        matA(ii+1:npp1o, ii) = covfuc(vario, oodist(inear(ii+1:npp1o), kk))                              ! obs ~ obs
-        if (npp1g  > 0) matA(npp1o+1:npp1, ii) = covfuc(vario , ogdist (kk, inear(npp1o+1:npp1)-nobs ))  ! obs ~ grid
-        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, coodist(inear2(1:npp2)         , kk  ))  ! obs ~ obs2
-        if (ndrift > 0) matA(npp  +1:nppd, ii) = obsdrift(:,kk)                                          ! obsdrift
-        if (unbias > 0) matA(nppdu, ii) = 1.0                                                            ! unbias
-        rhsB(ii:ii) = covfuc(vario, ogdist(kk:kk, ig))                                                   ! right hand side
+                        matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
+        if (npp1o  >ii) matA(ii+1:npp1o  , ii) = covfuc(vario , sdistn1(robs(:,inear (ii+1:npp1o)  ), robs(:,kk)))  ! print*, ii, "obs1 ~ obs1"
+        if (npp1g  > 0) matA(npp1o+1:npp1, ii) = covfuc(vario , sdistn1(robs(:,inear (npp1o+1:npp1)), robs(:,kk)))  ! print*, ii, "obs1 ~ grid"
+        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(:,inear2(1:npp2      )), robs(:,kk)))  ! print*, ii, "obs1 ~ obs2"
+        if (ndrift > 0) matA(npp  +1:nppd, ii) = obsdrift(:,kk)                                                     ! print*, ii, "obsdrift"
+        if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
+                        rhsB(ii          : ii) = covfuc(vario , tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
       end do
 
       ! grids
       do ii=npp1o+1, npp1
-        kk = inear(ii)-nobs
-        matA(ii, ii)         = cov0(1)                                                                   ! diagonal
-        if (npp1g  > 0) matA(npp1o+1:npp1, ii) = covfuc(vario , ggdist (inear(npp1o+1:npp1)-nobs, kk))   ! grid ~ grid
-        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, ogdist2(inear2(1:npp2),           kk))   ! grid ~ obs2
-        if (ndrift > 0) matA(npp  +1:nppd, ii) = griddrift(:,kk)                                         ! griddrift
-        if (unbias > 0) matA(nppdu, ii) = 1.0                                                            ! unbias
-        rhsB(ii:ii) = covfuc(vario, ggdist(kk:kk, ig))                                                   ! right hand side
+        kk = inear(ii)
+                        matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
+        if (npp1   >ii) matA(ii   +1:npp1, ii) = covfuc(vario , sdistn1(robs(:,inear (ii+1:npp1)   ), robs(:,kk)))  ! print*, ii, "grid ~ grid"
+        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(:,inear2(1:npp2      )), robs(:,kk)))  ! print*, ii, "grid ~ obs2"
+        if (ndrift > 0) matA(npp  +1:nppd, ii) = griddrift(:,kk)                                                    ! print*, ii, "griddrift"
+        if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
+                        rhsB(ii          : ii) = covfuc(vario,  tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
       end do
 
-      ! if (verbose) print *, '  Kriging Cell2',ig
       ! obs2
-      do ii=npp1+1, npp
-        kk = inear2(ii-npp1)
-        matA(ii, ii)          = cov0(3)                                                                  ! diagonal
-        matA(npp1+1: npp, ii) = covfuc(vario2, oodist2(inear2(1:npp2), kk))                              ! obs2 ~ obs2
-        if (unbias > 0) matA(nppdu, ii) = 1.0                                                            ! unbias
-        rhsB(ii:ii) = covfuc(varioc, ogdist2(kk:kk, ig))                                                 ! right hand side
+      do ii=1, npp2
+        kk = inear2(ii)
+                        matA(npp1+ii      , npp1+ii) = cov0(3)                                                        ! print*, ii, "diagonal"
+        if (npp2   >ii) matA(npp1+ii+1:npp, npp1+ii) = covfuc(vario2, sdistn1(rob2(:,inear2(ii+1:npp2)),rob2(:,kk)))  ! print*, ii, "obs2 ~ obs2"
+        if (unbias > 0) matA(nppdu        , npp1+ii) = 1.0                                                            ! print*, ii, "unbias"
+                        rhsB(npp1+ii      : npp1+ii) = covfuc(varioc, tmpdist2(ii:ii))                                ! print*, ii, "right hand side"
       end do
 
-      ! if (verbose) print *, '  Kriging Cell3',ig
       ! drift
       if (ndrift > 0) rhsB(npp+1:nppd) = griddrift(:,ig)
 
@@ -353,11 +374,13 @@ program ppsgs
         (inear(ii)     , weights(ii),     ii=      1,npp1o), &
         (inear(ii)-nobs, weights(ii),     ii=npp1o+1,npp1), &
         (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
+      ! TODO: write the results directly if facfile is not defined.
     end do
     close(6)
     close(ifilefac)
 
   end if
+  if (verbose) print*, "PPSGS exited peacefully."
   contains
 
   function linecount(afile)
@@ -379,11 +402,11 @@ program ppsgs
 
     integer,intent(in)    :: number_of_values
     integer,allocatable   :: array(:)
-    integer               :: i, j, k, m, n
+    integer               :: l, j, k, m, n
     integer               :: temp
     real                  :: u
 
-    array=[(i,i=1,number_of_values)]
+    array=[(l,l=1,number_of_values)]
 
     ! The intrinsic RANDOM_NUMBER(3f) returns a real number (or an array
     ! of such) from the uniform distribution over the interval [0,1). (ie.
@@ -400,13 +423,13 @@ program ppsgs
     n=1
     m=number_of_values
     do k=1,2
-        do i=1,m
+        do l=1,m
           call random_number(u)
           j = n + FLOOR((m+1-n)*u)
           ! switch values
           temp=array(j)
-          array(j)=array(i)
-          array(i)=temp
+          array(j)=array(l)
+          array(l)=temp
         enddo
     enddo
   end function scramble
@@ -472,7 +495,7 @@ program ppsgs
     else
       call readdata(gridfile, ngrid, igrid, grid(1:ndim,:))
     end if
-    do ii =1, 5; print*, grid(:,ii); end do
+    !do ii =1, 5; print*, grid(:,ii); end do
   end subroutine readgrid
 
   subroutine readobs(ivar)
@@ -486,12 +509,12 @@ program ppsgs
       else
         call readdata(obsfile, nobs, iobs, obs)
       end if
-      do ii =1, 5; print*,obs(:,ii); end do
+      !do ii =1, 5; print*,obs(:,ii); end do
     else
       if (verbose) print*, 'Reading covariate OBS in "'//trim(obsfile2)//'"'
       if (nobs2==0) nobs2 = linecount(obsfile2) - 1
       call readdata(obsfile2, nobs2, iobs2, obs2)
-      do ii =1, 5; print*,obs2(:,ii); end do
+      !do ii =1, 5; print*,obs2(:,ii); end do
     end if
   end subroutine readobs
 
@@ -528,40 +551,25 @@ program ppsgs
     end if
   end subroutine set_samples
 
-  ! calculate distance between obs and grid
-  function cdist(coord1, coord2)
-    real              :: coord1(:,:), coord2(:,:)
-    real, allocatable :: cdist(:,:)
+  ! calculate distance between multiple points to one point
+  function sdist1(coord1, coord2) result(res)
+    real              :: coord1(:), coord2(:)
+    real, allocatable :: res
     ! local
     integer                       :: n1, n2
-    n1 = size(coord1, dim=2)
-    n2 = size(coord2, dim=2)
 
-    allocate(cdist(n1,n2))
-    do ii = 1, n1
-      do jj = 1, n2
-        cdist(ii, jj) = rotated_dist(ndim, coord1(1:ndim, ii), coord2(1:ndim, jj))
-      end do
-    end do
-  end function cdist
+    res = sqrt(sum((coord1(:ndim) - coord2(:ndim)) ** 2))
+  end function
 
-  ! calculate distance between obs (upper triangular matrix)
-  function pdist(coord1)
-    integer                       :: n
-    real              :: coord1(:,:)
-    real, allocatable :: pdist(:,:)
+  function sdistn1(coords, coord2) result(res)
+    real              :: coords(:,:), coord2(:)
+    real, allocatable :: res(:)
+    ! local
+    integer                       :: n1, n2
+    n1 = size(coords, dim=2)
 
-    n = size(coord1, dim=2)
-    allocate(pdist(n, n))
-    pdist = 0.0
-    do ii = 1, n
-      do jj = ii+1, n
-        pdist(jj, ii) = rotated_dist(ndim, coord1(1:ndim, ii), coord1(1:ndim, jj))
-        pdist(ii, jj) = pdist(jj, ii)
-      end do
-    end do
-    !print*, pdist
-  end function pdist
+    res = [(sdist1(coords(:, ii), coord2), ii = 1, n1)]
+  end function
 
   ! read factor file
   subroutine readfactor()
@@ -577,24 +585,25 @@ program ppsgs
   end subroutine perr
 
   subroutine setdist()
-    if (verbose) print*, 'Calculating distances ...'
-    oodist = pdist(obs (1:ndim, :))                         ! distance of primary variate ~ primary variate
-    if (nsim>0) ggdist = pdist(grid(1:ndim, :))             ! distance of grid ~ grid
-    ! print*, 'ggdist'
-    ! print '(4(G0.12,x))', ggdist(1:4,1:4)
-    ogdist = cdist(obs(1:ndim, :), grid(1:ndim, :))         ! distance of grid ~ primary variate
-    ! print*, 'ogdist'
-    ! print '(4(G0.12,x))', ogdist(1:4,1:4)
+    real, allocatable :: centerloc(:)
+    if (verbose) print*, 'Building distance kdtree ...'
+
+    ! rotating/scaling
+    centerloc = sum(grid(1:ndim, :), dim=2)/ngrid
+    robs = rotate(ndim, nobs+ngrid, reshape([obs(1:ndim, :), grid(1:ndim, :)], [ndim, nobs+ngrid]), centerloc)
+    if (nsim>0) then
+      allocate(kdmask(nobs+ngrid))
+      kdmask(:nobs) = .true.
+      kdmask(nobs:) = .false.
+      obstree => kdtree2_create(robs         , sort=.false., rearrange=.false.)
+    else
+      obstree => kdtree2_create(robs(:,:nobs), sort=.false., rearrange=.false.)
+    end if
+
+
     if (nobs2>0) then
-      oodist2 = pdist(obs2(1:ndim, :))                      ! distance of covariate ~ covariate
-      ! print*, 'oodist2'
-      ! print '(4(G0.12,x))', oodist2(1:4,1:4)
-      ogdist2 = cdist(obs2(1:ndim, :), grid(1:ndim, :))     ! distance of grid ~ covariate
-      ! print*, 'ogdist2'
-      ! print '(4(G0.12,x))', ogdist2(1:4,1:4)
-      coodist = cdist(obs2(1:ndim, :), obs(1:ndim, :))      ! distance of variate ~ covariate
-      ! print*, 'coodist'
-      ! print '(4(G0.12,x))', coodist(1:4,1:4)
+      rob2 = rotate(ndim, nobs2, obs2(1:ndim, :), centerloc)
+      obstree2 => kdtree2_create(rob2, sort=.false., rearrange=.false.)
     end if
   end subroutine setdist
 
@@ -627,6 +636,7 @@ program ppsgs
       do ii =1, npp1
         write(ifile, "(I0)") inear(ii)
       end do
+      close(ifile)
       if (npp2>0) then
         open(newunit=ifile, file='index2.dat', status='replace')
         do ii =1, npp2
@@ -645,21 +655,21 @@ program ppsgs
     end if
   end subroutine krige
 
-  subroutine write_output(arr)
-    real    :: arr(:)
+  subroutine write_output()
+
     if (trim(outfile)=='~') then
       ifile = output_unit ! print to stdout
     else
-      open(newunit=ifile, file=outfile, status='replace')
+      open(newunit=ifile, file=trim(outfile), status='replace')
     end if
-
-    write(ifile, fomt) arr
+    write(ifile, fomt) grid(ndim+1, :)
 
     if (ifile /= output_unit) close(ifile)
     if (verbose) print*, 'Results have been written successfully'
   end subroutine write_output
 
   subroutine showhelp()
+    integer    :: Mandatory = 2
     print "(A)", ''
     print "(A)", ''
     print "(A)", ' ppsgs -d ndim nobs ngrid nobs2 ndrift -o obsfile [-g gridfile] [-f facfile] [-o2 obsfile2] [options] [output]'
@@ -667,12 +677,12 @@ program ppsgs
     print "(A)", '   Generate sequential gaussian simulation.'
     print "(A)", ' '
     print "(A)", '   Arguments:'
-    do ii=1, 3
+    do ii=1, Mandatory
       print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//trim(opts(ii)%description)
     end do
     print "(A)", ' '
     print "(A)", '   Optional arguments:'
-    do ii=4, size(opts)
+    do ii=Mandatory+1, size(opts)
       print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//trim(opts(ii)%description)
     end do
     print "(A)", '      output               output file name. If output=="~" or omitted, output will print to screen.'
