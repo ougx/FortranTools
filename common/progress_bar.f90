@@ -10,6 +10,10 @@ subroutine progress(r)
     bar(6+k:6+k)="*"
   enddo
   ! print the progress bar.
-  write(unit=6,fmt="(a1,a1,a17)") '+',char(13), bar
+#ifdef __INTEL_COMPILER
+  write(unit=6,fmt="(a1,a1,x,a17)") '+',char(13), bar
+#else
+  write(unit=6,fmt="(a1,a1,x,a17)",advance="no") '+',char(13), bar
+#endif
   return
 end subroutine progress

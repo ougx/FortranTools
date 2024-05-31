@@ -8,7 +8,7 @@ program ppsgs
   use normal_dist
   use variogram
   use kdtree2_module
-  use ieee_arithmetic
+  !use ieee_arithmetic
   use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
 
@@ -20,11 +20,11 @@ program ppsgs
   type(option_s), allocatable       :: opts(:)
   type(kdtree2_result), allocatable :: kdnearest(:),kdnearest2(:)
 
-  character(1024) :: obsfile, obsfile2, gridfile, facfile, outfile, randpath, samfile, fomt
+  character(2048) :: obsfile, obsfile2, gridfile, facfile, outfile, randpath, samfile, fomt
   character(len=2)  :: opt
   ! inputs
   integer         :: ndim, nobs, ngrid, ndrift, nmax, seed, unbias, nobs2, nmax2, nsim
-  real            :: maxdist, vmin, vmax, std, avg
+  real            :: maxdist, vmin, vmax, std, avg, avg2
   integer, allocatable :: irandpath(:), iobs(:), igrid(:), iobs2(:)
   logical, allocatable :: kdmask(:)
   real, allocatable ::  obs(:,:),  obs2(:,:),  grid(:,:), obsdrift(:,:), griddrift(:,:) ! coordinates and values, variance
@@ -38,7 +38,7 @@ program ppsgs
   real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:)
   real, allocatable :: weights(:), matA(:,:), rhsB(:), obsval(:)
   integer, allocatable :: inear(:), inear2(:)
-  logical         :: correct_weight, verbose
+  logical         :: correct_weight, writexy, verbose
 
 
   allocate(opts, source=(/&
@@ -64,8 +64,9 @@ program ppsgs
     option_s("varioc",  "vc", 4, "set cross-variogram between the primary and secondary variables."), &
     option_s("bounds",  "bs", 2, "set the lower and upper bounds, if not set, the simulation is unbounded."), &
     option_s("maxdist", "md", 1, "set the maximum distance for search, this is the rotated/anisotropic distance if there is rotation/anisotropy."), &
-    option_s("correct",  "c", 0, "apply weight correction. default is no weight correction."), &
+    option_s("correct",  "c", 0, "apply weight correction by removing negative weights. default is no weight correction."), &
     option_s("fmt"    , "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(G0.12)'."), &
+    option_s("writexy", "xy", 0, "write coordinates in the output; default only estimates are written."), &
     option_s("verbose", "vb", 0, "print running logs to screen."), &
     option_s("help"   ,  "h", 0, "show this message.") &
   /))
@@ -86,11 +87,11 @@ program ppsgs
   ndrift = -1
   unbias = 0
   seed = 0
-  ang1   = 0
-  ang2   = 0
-  ang3   = 0
-  anis1  = 1
-  anis2  = 1
+  ang1   = 0.0
+  ang2   = 0.0
+  ang3   = 0.0
+  anis1  = 1.0
+  anis2  = 1.0
   nsim = 1
   correct_weight = .false.
   ndim = 2
@@ -99,6 +100,7 @@ program ppsgs
   ngrid = 0
   vmin = -verylarge
   vmax =  verylarge
+  writexy = .false.
   verbose = .false.
   ! check if verbose is set
   do
@@ -115,7 +117,7 @@ program ppsgs
     select case(trim(opt))
       ! When all options are processed
       case(char(0))
-        if (len_trim(optarg)>0) outfile = trim(optarg)
+        if (len_trim(optarg)>0) outfile = adjustl(trim(optarg))
         exit
 
       case( "d")
@@ -135,21 +137,21 @@ program ppsgs
           allocate(obsdrift (ndrift, nobs))
         end if
 
-      case( "o"); read(optarg, *) obsfile;  call readobs(1)
+      case( "o"); obsfile =adjustl(optarg); call readobs(1)
 
-      case("o2"); read(optarg, *) obsfile2; if (nobs2>0) call readobs(2)
+      case("o2"); obsfile2=adjustl(optarg); if (nobs2>0) call readobs(2)
 
-      case( "g"); read(optarg, *) gridfile; call readgrid()
+      case( "g"); gridfile=adjustl(optarg); call readgrid()
 
       case( "u"); unbias = 1
 
       case( "c"); correct_weight = .true.
 
-      case( "f"); read(optarg, *) facfile
+      case( "f"); facfile=adjustl(optarg)
 
-      case( "r"); read(optarg, *) randpath
+      case( "r"); randpath=adjustl(optarg)
 
-      case( "s"); read(optarg, *) samfile
+      case( "s"); samfile=adjustl(optarg)
 
       case("sd"); read(optarg, *) seed
 
@@ -172,6 +174,7 @@ program ppsgs
 
       case("fm"); read(optarg, *) fomt
 
+      case("xy"); writexy = .true.
       case("vb"); verbose = .true.
 
       case("h"); call showhelp
@@ -192,10 +195,12 @@ program ppsgs
     nmax2 = 0
   end if
   if (nmax>nobs+ngrid-1) nmax=nobs+ngrid-1
+  call setrot()
 
   if (gridfile == '') then
     ! read the factors from file
     if (verbose) print*, 'Estimating values using factors in "'//trim(facfile)//'"'
+    writexy = .false.
     allocate(inear (nobs+ngrid-1))
     allocate(obsval(nobs+ngrid-1))
     allocate(weights(nobs+ngrid+nobs2-1))
@@ -216,9 +221,16 @@ program ppsgs
       obsval(npp1o+1:npp1 )  = grid(ndim+1, irandpath(inear (npp1o+1:npp1 )))
       obsval(npp1 +1:npp  )  = obs2(ndim+1, inear2(      1:npp2 ))
       avg = sum(obsval(1:npp1)) / npp1      ! the average of obs1 and grid
-      obsval(1:npp) = obsval(1:npp) - avg
+      ! if (unbias==0) obsval(1:npp1) = obsval(1:npp1) - avg
+      if (npp2>0) then
+        avg2 = sum(obsval(npp1+1:npp)) / npp2
+        obsval(npp1+1:npp) = obsval(npp1+1:npp) + avg - avg2  ! ISAAKS and SRIVASTAVA, An Introduction to Applied Geostatistics, pp410
+      end if
       kk = irandpath(ig)
-      grid(ndim+1, kk) = sum(weights(1:npp) * obsval(1:npp)) + avg
+      grid(ndim+1, kk) = sum(weights(1:npp) * obsval(1:npp))
+      ! if (unbias==0) then
+      !   grid(ndim+1, kk) = (1.0 - sum(weights(1:npp1))) * avg
+      ! end if
       grid(ndim+1, kk) = grid(ndim+1, kk) + samples(ig) * std
       if (grid(ndim+1, kk) < vmin) grid(ndim+1, kk) = vmin
       if (grid(ndim+1, kk) > vmax) grid(ndim+1, kk) = vmax
@@ -237,7 +249,6 @@ program ppsgs
     allocate(matA(matsize, matsize), rhsB(matsize), kdnearest(nmax))
     if (nobs2>0) allocate(kdnearest2(nmax2))
 
-    call setrot()
     if (nsim>0) then
       call set_randpath()
       grid = grid(:, irandpath)
@@ -254,7 +265,11 @@ program ppsgs
       write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
     end if
 
+#ifdef __INTEL_COMPILER
     if (verbose) open (unit=6, carriagecontrol='fortran')
+#endif
+
+
     do ig = 1, ngrid
 
       ! search for the nearest obs
@@ -266,8 +281,8 @@ program ppsgs
       else
         kdmask(nobs+mgrid) = .true.
       end if
-      
-      xcell = robs(:ndim,nobs+ig) 
+
+      xcell = robs(:ndim,nobs+ig)
       if (nobs+mgrid>nmax) then
         ! print*, ig, 'search for neighbor1'
         call kdtree2_n_nearest(obstree,xcell,nmax,kdnearest,kdmask)
@@ -369,6 +384,10 @@ program ppsgs
       if (unbias > 0) rhsB(nppdu)      = 1
 
       call krige()
+      if (correct_weight) then
+        where(weights(1:npp)<0.0) weights(1:npp)=0.0
+        weights(1:npp) = weights(1:npp) / sum(weights(1:npp))
+      end if
       std = sqrt(cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu)))
       write(ifilefac, '(4(I0,x),G0.12,*(:x,I0,x,F0.10))') irandpath(ig), npp1o, npp1g, npp2, std, &
         (inear(ii)     , weights(ii),     ii=      1,npp1o), &
@@ -376,7 +395,11 @@ program ppsgs
         (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
       ! TODO: write the results directly if facfile is not defined.
     end do
-    close(6)
+#ifdef __INTEL_COMPILER
+    if (verbose) close(6)
+#else
+    if (verbose) print *, "" ! start a new line below the progress bar
+#endif
     close(ifilefac)
 
   end if
@@ -555,8 +578,6 @@ program ppsgs
   function sdist1(coord1, coord2) result(res)
     real              :: coord1(:), coord2(:)
     real, allocatable :: res
-    ! local
-    integer                       :: n1, n2
 
     res = sqrt(sum((coord1(:ndim) - coord2(:ndim)) ** 2))
   end function
@@ -565,7 +586,7 @@ program ppsgs
     real              :: coords(:,:), coord2(:)
     real, allocatable :: res(:)
     ! local
-    integer                       :: n1, n2
+    integer                       :: n1
     n1 = size(coords, dim=2)
 
     res = [(sdist1(coords(:, ii), coord2), ii = 1, n1)]
@@ -595,22 +616,28 @@ program ppsgs
       allocate(kdmask(nobs+ngrid))
       kdmask(:nobs) = .true.
       kdmask(nobs:) = .false.
+      ! print*, 'Building distance kdtree 1'
       obstree => kdtree2_create(robs         , sort=.false., rearrange=.false.)
     else
+      ! print*, 'Building distance kdtree 1a'
+      ! print "(3F10.2)", centerloc
+      ! print "(3F10.2)", robs(:,nobs-10:nobs)
       obstree => kdtree2_create(robs(:,:nobs), sort=.false., rearrange=.false.)
     end if
-
+    ! print*, 'Building distance kdtree 1z'
 
     if (nobs2>0) then
       rob2 = rotate(ndim, nobs2, obs2(1:ndim, :), centerloc)
       obstree2 => kdtree2_create(rob2, sort=.false., rearrange=.false.)
     end if
+    ! print*, 'Building distance kdtree 2'
   end subroutine setdist
 
   subroutine krige()
     real, allocatable       ::  AP(:), B(:)
     integer, allocatable    ::  IPIV(:)
     integer                 ::  INFO
+    character*256           ::  sig
     ! nppdu is the mat size ~ obs + drift + unbias
     allocate(AP(nppdu*(nppdu+1)/2), B(nppdu), IPIV(nppdu))
     ! store the matrix to column compact form
@@ -624,7 +651,7 @@ program ppsgs
     if (INFO /= 0) then
       open(newunit=ifile, file='matA.dat', status='replace')
       do ii =1, nppdu
-        write(ifile, "(*(ES12.4))") matA(:, ii)
+        write(ifile, "(*(ES12.4))") matA(:nppdu, ii)
       end do
       close(ifile)
       open(newunit=ifile, file='rhsB.dat', status='replace')
@@ -644,7 +671,8 @@ program ppsgs
         end do
       end if
       close(ifile)
-      call perr('Failed to find solution of the linear system.')
+      write(sig, "(I0)") ig
+      call perr(new_line("")//'Failed to find solution of the linear system at cell '//trim(sig))
     end if
 
     if (correct_weight) then
@@ -662,7 +690,13 @@ program ppsgs
     else
       open(newunit=ifile, file=trim(outfile), status='replace')
     end if
-    write(ifile, fomt) grid(ndim+1, :)
+    if (writexy) then
+      do ig=1, ngrid
+        write(ifile, "(I0,*(:',',G0.12))") igrid(ig), grid(:ndim+1, ig)
+      end do
+    else
+      write(ifile, fomt) grid(ndim+1, :)
+    end if
 
     if (ifile /= output_unit) close(ifile)
     if (verbose) print*, 'Results have been written successfully'

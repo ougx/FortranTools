@@ -1,7 +1,7 @@
 module rotation
 real      :: rotmat(3,3)
 real      :: ang1=0e0,ang2=0e0,ang3=0e0,anis1=1e0,anis2=1e0
-logical   :: scaling
+logical   :: scaling = .false.
 contains
 subroutine setrot()
 
@@ -56,7 +56,7 @@ else
     alpha = (450.0  - ang1) * DEG2RAD
 endif
 beta  = -1.0 * ang2 * DEG2RAD
-theta =          ang3 * DEG2RAD
+theta =        ang3 * DEG2RAD
 !
 ! Get the required sines and cosines:
 !
@@ -72,13 +72,13 @@ cost  = cos(theta)
 afac1 = 1.0 / max(anis1,EPSLON)
 afac2 = 1.0 / max(anis2,EPSLON)
 rotmat(1,1) =       (cosb * cosa)
-rotmat(2,1) =       (cosb * sina)
-rotmat(3,1) =       (-sinb)
-rotmat(1,2) = afac1*(-cost*sina + sint*sinb*cosa)
+rotmat(1,2) =       (cosb * sina)
+rotmat(1,3) =       (-sinb)
+rotmat(2,1) = afac1*(-cost*sina + sint*sinb*cosa)
 rotmat(2,2) = afac1*(cost*cosa + sint*sinb*sina)
-rotmat(3,2) = afac1*( sint * cosb)
-rotmat(1,3) = afac2*(sint*sina + cost*sinb*cosa)
-rotmat(2,3) = afac2*(-sint*cosa + cost*sinb*sina)
+rotmat(2,3) = afac1*( sint * cosb)
+rotmat(3,1) = afac2*(sint*sina + cost*sinb*cosa)
+rotmat(3,2) = afac2*(-sint*cosa + cost*sinb*sina)
 rotmat(3,3) = afac2*(cost * cosb)
 
 end subroutine setrot
@@ -106,20 +106,22 @@ real                    :: coord2(ndim, npnt)
 real, optional          :: origin(ndim)
 ! local
 integer                 :: idim, ipnt
-! print "(2F10.2)", coord1
+real, allocatable       :: coords(:,:)
+
+coords = coord1
 if (present(origin)) then
-  do ipnt=1, npnt
-    coord2(:,ipnt) = coord1(:,ipnt) - origin
+  do idim=1, ndim
+    coords(idim,:) = coords(idim,:) - origin(idim)
   end do
-else
-    coord2 = coord1
 end if
 
 ! print "(2F10.2)", coord2
 if (scaling) then
     do idim=1, ndim
-        coord2(idim,:) = [(sum(coord2(:,ipnt) * rotmat(idim, 1:ndim)), ipnt=1, npnt)]
+        coord2(idim,:) = [(sum(rotmat(1:ndim, idim)*coords(1:ndim,ipnt)), ipnt=1, npnt)]
     end do
+else
+    coord2 = coords
 end if
 end function
 
