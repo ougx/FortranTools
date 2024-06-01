@@ -125,7 +125,7 @@ program ppsgs
         allocate(irandpath(ngrid))
         allocate(obs(ndim+1, nobs))     ! coordinates plus values
         allocate(iobs(nobs))
-        allocate(grid(ndim+1, ngrid))   ! coordinates plus values
+        allocate(grid(ndim+2, ngrid))   ! coordinates plus values
         allocate(igrid(ngrid))
         allocate(samples(ngrid))
         if (nobs2>0) then
@@ -252,6 +252,7 @@ program ppsgs
     if (nsim>0) then
       call set_randpath()
       grid = grid(:, irandpath)
+      igrid = igrid(irandpath)
     else
       irandpath=[(ig, ig=1, ngrid)]
     end if
@@ -263,12 +264,13 @@ program ppsgs
       if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
       open(newunit=ifilefac, file=trim(facfile), status='replace')
       write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
+    else
+      ifilefac = 0
     end if
 
 #ifdef __INTEL_COMPILER
     if (verbose) open (unit=6, carriagecontrol='fortran')
 #endif
-
 
     do ig = 1, ngrid
 
@@ -388,20 +390,37 @@ program ppsgs
         where(weights(1:npp)<0.0) weights(1:npp)=0.0
         weights(1:npp) = weights(1:npp) / sum(weights(1:npp))
       end if
-      std = sqrt(cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu)))
-      write(ifilefac, '(4(I0,x),G0.12,*(:x,I0,x,F0.10))') irandpath(ig), npp1o, npp1g, npp2, std, &
-        (inear(ii)     , weights(ii),     ii=      1,npp1o), &
-        (inear(ii)-nobs, weights(ii),     ii=npp1o+1,npp1), &
-        (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
-      ! TODO: write the results directly if facfile is not defined.
+      if (ifilefac==0) then
+        ! save result to grid for exporting
+        obsval = [obs(ndim+1,inear(:npp1o)), grid(ndim+1, inear(npp1o+1:npp1)-nobs), obs2(ndim+1, inear2(1:npp2))]
+        if (npp2>0) then
+          avg2 = sum(obsval(npp1+1:npp)) / npp2
+          obsval(npp1+1:npp) = obsval(npp1+1:npp) + avg - avg2  ! ISAAKS and SRIVASTAVA, An Introduction to Applied Geostatistics, pp410
+        end if
+        grid(ndim+1, ig) = sum(weights(1:npp) * obsval(1:npp))
+        grid(ndim+2, ig) = cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu))
+        if (nsim>0) grid(ndim+1, ig) = grid(ndim+1, ig) + samples(ig) * grid(ndim+2, ig) ** 0.5
+        if (grid(ndim+1, ig) < vmin) grid(ndim+1, ig) = vmin
+        if (grid(ndim+1, ig) > vmax) grid(ndim+1, ig) = vmax
+      else
+        ! save results to factor file
+        std = sqrt(cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu)))
+        write(ifilefac, '(4(I0,x),G0.12,*(:x,I0,x,F0.10))') irandpath(ig), npp1o, npp1g, npp2, std, &
+          (inear(ii)     , weights(ii),     ii=      1,npp1o), &
+          (inear(ii)-nobs, weights(ii),     ii=npp1o+1,npp1), &
+          (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
+      end if
     end do
 #ifdef __INTEL_COMPILER
     if (verbose) close(6)
 #else
     if (verbose) print *, "" ! start a new line below the progress bar
 #endif
-    close(ifilefac)
-
+    if (ifilefac==0) then
+      call write_output()
+    else
+      close(ifilefac)
+    end if
   end if
   if (verbose) print*, "PPSGS exited peacefully."
   contains
@@ -684,15 +703,16 @@ program ppsgs
   end subroutine krige
 
   subroutine write_output()
-
+    character :: cname(3)=['x', 'y', 'z']
     if (trim(outfile)=='~') then
       ifile = output_unit ! print to stdout
     else
       open(newunit=ifile, file=trim(outfile), status='replace')
     end if
     if (writexy) then
+      write(ifile, '(99(A,:,","))') 'igrid', cname(1:ndim), 'estimate', 'variance'
       do ig=1, ngrid
-        write(ifile, "(I0,*(:',',G0.12))") igrid(ig), grid(:ndim+1, ig)
+        write(ifile, "(I0,*(:',',G0.12))") igrid(ig), grid(:ndim+2, ig)
       end do
     else
       write(ifile, fomt) grid(ndim+1, :)
