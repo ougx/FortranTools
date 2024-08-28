@@ -28,7 +28,7 @@ module variogram
     case('gau'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; else; covfuc(i) = exp(-49.0 / 16.0 * hr(i) ** 2.0); end if; end do
     case('pow'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; else; covfuc(i) = 1 - hr(i) ** 2.0; end if; end do
     case('cir'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; elseif (dist(i)<va%range) then; covfuc(i) = (2 * hr(i) * sqrt(1.0 - hr(i)**2) + 2 * asin(hr(i))) / pi; end if; end do
-    case('lin'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; else; covfuc(i) = 1 - hr(i); end if; end do
+    case('lin'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; elseif (dist(i)<va%range) then; covfuc(i) = 1 - hr(i); else; covfuc(i) = 0; end if; end do
     case default; print*, 'Unknown variogram model.'; stop
     end select
 

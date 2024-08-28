@@ -22,30 +22,32 @@ program arraymath
   character(30), allocatable   :: rownames(:), colnames(:), tmpnames(:)
   logical         :: verbose
 
-  integer         :: nrow, ncol, itemp, mdim, hasRowName, hasColName, maxRowNameWidth
+  integer         :: nrow, ncol, itemp, mdim, hasRowName, hasColName, maxRowNameWidth, ntmp
   integer, allocatable:: rowindex(:)
 
   allocate(opts, source=(/&
-    option_s("dim"    ,  "d", 2, "shape of the array, i.e. nrow ncol; this must be defined as the first argument."), &
-    option_s("add"    ,  "a", 3, "adding a new array, follwed by three arguments: arrayfile multiplyfile scale; if arrayfile is '-', it reads stdin; if multiplyfile is '-', no multiarray is used."), &
-    option_s("multi"  ,  "m", 1, "multiply with a new array reading from a file; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
-    option_s("dot"  ,   "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
-    option_s("help"   ,  "h", 0, "show this message."), &
-    option_s("fmt"    , "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
-    option_s("offset" ,  "o", 1, "adding offset to the final result, default is zero."), &
-    option_s("skiprow", "sr", 1, "number of rows to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
-    option_s("skipcol", "sc", 1, "number of columns to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
-    option_s("func"   ,  "x", 1, "apply a Fortran intrinsic mathematical function to the final result"), &
-    option_s("groupby",  "g", 2, "split and apply a function."), &
-    option_s("power"  ,  "p", 1, "apply a power function to the final result"), &
-    option_s("clip",     "c", 2, "clip the array to the interval between vmin and vmax. if `-c 0 1` is specified, values smaller than 0 become 0, and values larger than 1 become 1."), &
-    option_s("subset" ,  "s", 1, "subset the array. -s r1:10 to subset the first 10 rows; -s c1,3,5 to subset the columns 1,3 and 5; -s r2:2 or -s c5:5 to subset one row or column."), &
-    option_s("filter" ,  "f", 1, "filter array by column names, e.g. --filter time>=3; --filter layer==1"), &
-    option_s("verbose",  "v", 0, "print running logs to screen."), &
-    option_s("rowname", "rn", 0, "enable/disable reading row names from the first column after skipping columns. default is off."), &
-    option_s("colname", "cn", 0, "enable/disable reading column names from the first row after skipping rows. default is off."), &
-    option_s("mfbin" ,  "mb", 0, "TODO: read modflow binary file"), &
-    option_s("mfdbin",  "md", 0, "TODO: read modflow binary file in double precision")  &
+    option_s("dim"      ,  "d", 2, "shape of the array, i.e. nrow ncol; this must be defined as the first argument."), &
+    option_s("add"      ,  "a", 3, "adding a new array, follwed by three arguments: arrayfile multiplyfile scale; if arrayfile is '-', it reads stdin; if multiplyfile is '-', no multiarray is used."), &
+    option_s("multi"    ,  "m", 1, "multiply with a number or a new array reading from a file; follwed by one argument. if the argument starts with '*', it multiplies the number after '*'."), &
+    option_s("dot"      , "dt", 1, "Calculate dot product of the array and another array; follwed by one argument: multiplyfile; if multiplyfile is '-', it reads stdin."), &
+    option_s("help"     ,  "h", 0, "show this message."), &
+    option_s("fmt"      , "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(*(G0.8,x))'."), &
+    option_s("offset"   ,  "o", 1, "adding offset to the final result, default is zero."), &
+    option_s("duplicate", "dr", 1, "duplicate the rows for a number of times."), &
+    option_s("skiprow"  , "sr", 1, "number of rows to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
+    option_s("skipcol"  , "sc", 1, "number of columns to skip when reading the input array file; must define before reading the file; default is zero; it can be defined multiple times."), &
+    option_s("func"     ,  "x", 1, "apply a Fortran intrinsic mathematical function to the final result"), &
+    option_s("groupby"  ,  "g", 2, "split and apply a function."), &
+    option_s("power"    ,  "p", 1, "apply a power function to the final result"), &
+    option_s("clip",       "c", 2, "clip the array to the interval between vmin and vmax. if `-c 0 1` is specified, values smaller than 0 become 0, and values larger than 1 become 1."), &
+    option_s("subset"   ,  "s", 1, "subset the array. -s r1:10 to subset the first 10 rows; -s c1,3,5 to subset the columns 1,3 and 5; -s r2:2 or -s c5:5 to subset one row or column."), &
+    option_s("filter"   ,  "f", 1, "filter array by column names, e.g. --filter time>=3; --filter layer==1"), &
+    option_s("verbose"  ,  "v", 0, "print running logs to screen."), &
+    option_s("transpose",  "t", 0, "transposes the array."), &
+    option_s("rowname"  , "rn", 0, "enable/disable reading row names from the first column after skipping columns. default is off."), &
+    option_s("colname"  , "cn", 0, "enable/disable reading column names from the first row after skipping rows. default is off."), &
+    option_s("mfbin"    , "mb", 0, "TODO: read modflow binary file"), &
+    option_s("mfdbin"   , "md", 0, "TODO: read modflow binary file in double precision")  &
   /))
 
 
@@ -93,9 +95,16 @@ program arraymath
         if (hasColName==0) call perror('filter option can only applied to named columns')
         call filter()
 
+      case("t")
+        call rtranspose()
+
       case("p")
         read(optarg, *) power
         results = results ** power
+
+      case("dr")
+        read(optarg, *) ntmp
+        call duplicate_rows(ntmp)
 
       case("c")
         read(optarg, *) vmin, vmax
@@ -111,16 +120,21 @@ program arraymath
 
       case("m")
         read(optarg, *) multfile
-        allocate(multi, source=results)
-        if (trim(multfile) == '-') then
-          !TODO:
-          read(input_unit, *) multi
+        if (multfile(1:1)=="*") then
+          read(multfile(2:), *) rscale
+          results = results * rscale
         else
-          call readdata(multfile, multi)
+          allocate(multi, source=results)
+          if (trim(multfile) == '-') then
+            !TODO:
+            read(input_unit, *) multi
+          else
+            call readdata(multfile, multi)
+          end if
+          if (verbose) print*, "Multiplying array from "//trim(multfile)
+          results = results * multi
+          deallocate(multi)
         end if
-        if (verbose) print*, "Multiplying array from "//trim(multfile)
-        results = results * multi
-        deallocate(multi)
 
       case("dt")
         read(optarg, *) multfile
@@ -381,6 +395,38 @@ program arraymath
 
   end subroutine
 
+
+  subroutine rtranspose()
+    allocate(trans(nrow, ncol))
+    do irow=1, nrow
+      do icol=1, ncol
+        trans(irow, icol) = results(icol, irow)
+      end do
+    end do
+    deallocate(results)
+    allocate(results(nrow, ncol))
+    results = trans
+    deallocate(trans)
+    ntmp = ncol
+    ncol = nrow
+    nrow = ntmp
+  end subroutine
+
+
+  subroutine duplicate_rows(duplicate)
+    integer :: duplicate
+
+    allocate(trans, source=results)
+    deallocate(results)
+    allocate(results(ncol, nrow*duplicate))
+    do irow = 1, duplicate
+      results(:, (nrow*(irow-1)+1):nrow*irow) = trans
+    end do
+    deallocate(trans)
+    nrow = nrow * duplicate
+  end subroutine
+
+
   subroutine groupby()
     integer  :: ngroup, ig1
     character(30)   :: colname
@@ -471,13 +517,7 @@ program arraymath
     results=results(rowindex(1:ncol),:)
   else &
   if (trim(func)=='transpose')then
-    call redefine_array(source=transpose(results))
-    tmpnames=rownames
-    rownames=colnames
-    colnames=tmpnames
-    itemp = hasColName
-    hasColName = hasRowName
-    hasRowName = itemp
+    call rtranspose()
   else
     call perror('Unknown function: '//trim(func))
   end if
@@ -548,37 +588,37 @@ program arraymath
     print "(A)", '      output               output file name; must be the final argument. If output=="~" or omitted, output will print to screen.'
     print "(A)", ' '
     print "(A)", '   Functions for -x or --func:'
-    print "(A)", '     abs:       computes the absolute values of the array'
-    print "(A)", '     exp:       computes the base e exponential of the array.'
-    print "(A)", '     log10:     computes the base 10 logarithm of the array.'
-    print "(A)", '     log:       computes the base e logarithm of the array.'
-    print "(A)", '     sqrt:      computes the square root of the array.'
-    print "(A)", '     sinh:      computes the inverse hyperbolic sine of the array.'
-    print "(A)", '     cosh:      computes the hyperbolic cosine of the array.'
-    print "(A)", '     tanh:      computes the hyperbolic tangent of the array.'
-    print "(A)", '     sin:       computes the sine of the array.'
-    print "(A)", '     cos:       computes the cosine of the array.'
-    print "(A)", '     tan:       computes the tangent of the array.'
-    print "(A)", '     asin:      computes the arcsine of its the array (inverse of SIN(X))'
-    print "(A)", '     acos:      computes the arccosine of the array (inverse of COS(X))'
-    print "(A)", '     atan:      computes the arctangent of the array(inverse of TAN(X)).'
-    print "(A)", '     int:       converts the array to integer type.'
-    print "(A)", '     nint:      rounds the array to the nearest whole number.'
-    print "(A)", '     floor:     returns the greatest integer less than or equal to the array.'
-    print "(A)", '     inverse:   computes the reciprocal of each element in the array.'
-    print "(A)", '     matinv:    computes the matrix inverse of the array, using the LU factorization.'
-    print "(A)", '     fraction:  returns the fractional part of the model representation of the array.'
-    print "(A)", '     diff1:     subtract the first row from the array.'
-    print "(A)", '     diff:      calculates the difference of each row and its previous row: row_i - row_(i-1).'
-    print "(A)", '     cbrt:      calculates the cubic root of the array. The new results have the same sign as the original array.'
-    print "(A)", '     max:       calculates the maximum values for each columns.'
-    print "(A)", '     min:       calculates the minimum values for each columns.'
-    print "(A)", '     sum:       adds the elements along each columns.'
-    print "(A)", '     cumsum:    computes the cumulatice sum along each columns.'
-    print "(A)", '     mean:      calculates the average for each columns.'
-    print "(A)", '     transpose: transposes the array.'
-    print "(A)", '     sort:      sorts array by row names.'
-    print "(A)", '     sortc:     sorts array by column names.'
+    print "(A)", '     abs        computes the absolute values of the array'
+    print "(A)", '     exp        computes the base e exponential of the array.'
+    print "(A)", '     log10      computes the base 10 logarithm of the array.'
+    print "(A)", '     log        computes the base e logarithm of the array.'
+    print "(A)", '     sqrt       computes the square root of the array.'
+    print "(A)", '     sinh       computes the inverse hyperbolic sine of the array.'
+    print "(A)", '     cosh       computes the hyperbolic cosine of the array.'
+    print "(A)", '     tanh       computes the hyperbolic tangent of the array.'
+    print "(A)", '     sin        computes the sine of the array.'
+    print "(A)", '     cos        computes the cosine of the array.'
+    print "(A)", '     tan        computes the tangent of the array.'
+    print "(A)", '     asin       computes the arcsine of its the array (inverse of SIN(X))'
+    print "(A)", '     acos       computes the arccosine of the array (inverse of COS(X))'
+    print "(A)", '     atan       computes the arctangent of the array(inverse of TAN(X)).'
+    print "(A)", '     int        converts the array to integer type.'
+    print "(A)", '     nint       rounds the array to the nearest whole number.'
+    print "(A)", '     floor      returns the greatest integer less than or equal to the array.'
+    print "(A)", '     inverse    computes the reciprocal of each element in the array.'
+    print "(A)", '     matinv     computes the matrix inverse of the array, using the LU factorization.'
+    print "(A)", '     fraction   returns the fractional part of the model representation of the array.'
+    print "(A)", '     diff1      subtract the first row from the array.'
+    print "(A)", '     diff       calculates the difference of each row and its previous row  row_i - row_(i-1).'
+    print "(A)", '     cbrt       calculates the cubic root of the array. The new results have the same sign as the original array.'
+    print "(A)", '     max        calculates the maximum values for each columns.'
+    print "(A)", '     min        calculates the minimum values for each columns.'
+    print "(A)", '     sum        adds the elements along each columns.'
+    print "(A)", '     cumsum     computes the cumulatice sum along each columns.'
+    print "(A)", '     mean       calculates the average for each columns.'
+    print "(A)", '     transpose  transposes the array.'
+    print "(A)", '     sort       sorts array by row names.'
+    print "(A)", '     sortc      sorts array by column names.'
     stop
     end subroutine
   end program

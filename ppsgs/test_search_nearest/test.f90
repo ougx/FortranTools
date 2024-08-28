@@ -92,7 +92,7 @@ integer               :: nmax, iobs
 ndim = 3
 nobs = 66339
 allocate(obsloc(ndim, nobs))
-open(unit=10, file='aem.csv', status='old')
+open(unit=10, file='../test_data/aem3d_clay.csv', status='old')
 read(10, *)
 do ii=1, nobs
   read(10, *) ik, obsloc(:, ii)
@@ -237,7 +237,7 @@ subroutine test_search_exhaustive()
   ndim = 3
   nobs = 66339
   allocate(obsloc(ndim, nobs), mdist(nobs))
-  open(unit=10, file='aem.csv', status='old')
+  open(unit=10, file='../test_data/aem3d_clay.csv', status='old')
   read(10, *)
   do ii=1, nobs
     read(10, *) ik, obsloc(:, ii)
@@ -283,7 +283,7 @@ subroutine test_search_kdtree()
   ndim = 3
   nobs = 66339
   allocate(obsloc(ndim, nobs), mdist(nobs))
-  open(unit=10, file='aem.csv', status='old')
+  open(unit=10, file='../test_data/aem3d_clay.csv', status='old')
   read(10, *)
   do ii=1, nobs
     read(10, *) ik, obsloc(:, ii)
@@ -326,7 +326,7 @@ subroutine test_search_kdtree_mask()
   ndim = 3
   nobs = 66339
   allocate(obsloc(ndim, nobs), mdist(nobs))
-  open(unit=10, file='aem.csv', status='old')
+  open(unit=10, file='../test_data/aem3d_clay.csv', status='old')
   read(10, *)
   do ii=1, nobs
     read(10, *) ik, obsloc(:, ii)
@@ -369,7 +369,7 @@ subroutine test_search_kdtree_reang()
   ndim = 3
   nobs = 66339
   allocate(obsloc(ndim, nobs), mdist(nobs))
-  open(unit=10, file='aem.csv', status='old')
+  open(unit=10, file='../test_data/aem3d_clay.csv', status='old')
   read(10, *)
   do ii=1, nobs
     read(10, *) ik, obsloc(:, ii)

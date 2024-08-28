@@ -3,12 +3,12 @@
 program ppsgs
   use f90getopt
   !use m_mrgref
-  use m_inssor
+  !use m_inssor
   use rotation
-  use normal_dist
+  !use normal_dist
   use variogram
   use kdtree2_module
-  !use ieee_arithmetic
+  use ieee_arithmetic
   use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
 
@@ -16,7 +16,8 @@ program ppsgs
   real, parameter :: verylarge = huge(1.0e0) * 1e-3
   real, parameter :: zero = 0.0e0
 
-  type(kdtree2),  pointer           :: obstree, obstree2
+  type(kdtree2),  pointer           :: obstree
+  type(kdtree2),  pointer           :: obstree2
   type(option_s), allocatable       :: opts(:)
   type(kdtree2_result), allocatable :: kdnearest(:),kdnearest2(:)
 
@@ -30,15 +31,19 @@ program ppsgs
   real, allocatable ::  obs(:,:),  obs2(:,:),  grid(:,:), obsdrift(:,:), griddrift(:,:) ! coordinates and values, variance
   real, allocatable :: robs(:,:), rob2(:,:)                                ! rotated, coordinates for search and variogram
   real, allocatable :: samples(:)
+
+  real, allocatable       ::  solverAP(:), solverB(:)
+  integer, allocatable    ::  IPIV(:)
+
   type(variog)     :: vario, varioc, vario2
   ! local
   integer         :: matsize, npp, npp1, npp1o, npp1g, npp2, nppd, nppdu, mgrid
-  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim
+  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim, iout
   real            :: cov0(3)
   real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:)
-  real, allocatable :: weights(:), matA(:,:), rhsB(:), obsval(:)
+  real, allocatable :: weights(:), matA(:,:), rhsB(:)
   integer, allocatable :: inear(:), inear2(:)
-  logical         :: correct_weight, writexy, verbose
+  logical         :: correct_weight, writexy, verbose, neglect_error, writemat
 
 
   allocate(opts, source=(/&
@@ -67,7 +72,9 @@ program ppsgs
     option_s("correct",  "c", 0, "apply weight correction by removing negative weights. default is no weight correction."), &
     option_s("fmt"    , "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(G0.12)'."), &
     option_s("writexy", "xy", 0, "write coordinates in the output; default only estimates are written."), &
+    option_s("coerce",  "ec", 0, "failed grid point will be set as NaN when it fails to solve equation."), &
     option_s("verbose", "vb", 0, "print running logs to screen."), &
+    option_s("writemat","wm", 0, "write the matrix for debugging."), &
     option_s("help"   ,  "h", 0, "show this message.") &
   /))
 
@@ -90,8 +97,8 @@ program ppsgs
   ang1   = 0.0
   ang2   = 0.0
   ang3   = 0.0
-  anis1  = 1.0
-  anis2  = 1.0
+  anis1  = 1.0e0
+  anis2  = 1.0e0
   nsim = 1
   correct_weight = .false.
   ndim = 2
@@ -102,6 +109,8 @@ program ppsgs
   vmax =  verylarge
   writexy = .false.
   verbose = .false.
+  neglect_error = .false.
+  writemat = .false.
   ! check if verbose is set
   do
     opt = getopt(opts)
@@ -174,8 +183,10 @@ program ppsgs
 
       case("fm"); read(optarg, *) fomt
 
+      case("ec"); neglect_error = .true.
       case("xy"); writexy = .true.
       case("vb"); verbose = .true.
+      case("wm"); writemat = .true.
 
       case("h"); call showhelp
 
@@ -202,7 +213,6 @@ program ppsgs
     if (verbose) print*, 'Estimating values using factors in "'//trim(facfile)//'"'
     writexy = .false.
     allocate(inear (nobs+ngrid-1))
-    allocate(obsval(nobs+ngrid-1))
     allocate(weights(nobs+ngrid+nobs2-1))
     if (nobs2>0) then
       allocate(inear2(nobs2-1))
@@ -217,25 +227,12 @@ program ppsgs
       npp1 = npp1o + npp1g
       npp  = npp1 + npp2
 
-      obsval(      1:npp1o)  = obs (ndim+1, inear (      1:npp1o))
-      obsval(npp1o+1:npp1 )  = grid(ndim+1, irandpath(inear (npp1o+1:npp1 )))
-      obsval(npp1 +1:npp  )  = obs2(ndim+1, inear2(      1:npp2 ))
-      avg = sum(obsval(1:npp1)) / npp1      ! the average of obs1 and grid
-      ! if (unbias==0) obsval(1:npp1) = obsval(1:npp1) - avg
-      if (npp2>0) then
-        avg2 = sum(obsval(npp1+1:npp)) / npp2
-        obsval(npp1+1:npp) = obsval(npp1+1:npp) + avg - avg2  ! ISAAKS and SRIVASTAVA, An Introduction to Applied Geostatistics, pp410
-      end if
       kk = irandpath(ig)
-      grid(ndim+1, kk) = sum(weights(1:npp) * obsval(1:npp))
-      ! if (unbias==0) then
-      !   grid(ndim+1, kk) = (1.0 - sum(weights(1:npp1))) * avg
-      ! end if
-      grid(ndim+1, kk) = grid(ndim+1, kk) + samples(ig) * std
-      if (grid(ndim+1, kk) < vmin) grid(ndim+1, kk) = vmin
-      if (grid(ndim+1, kk) > vmax) grid(ndim+1, kk) = vmax
+      if (npp1g > 0) inear(npp1o+1:npp1) = irandpath(inear(npp1o+1:npp1 ))
+      grid(ndim+1, kk) = weighted_average(samples(ig), std)
     end do
     !if (nsim==0) then
+    call open_output()
     call write_output()
     !else
     !  ! put back in correct order
@@ -246,8 +243,8 @@ program ppsgs
     ! Krige the factors
     matsize = nmax+unbias+ndrift+nmax2
     allocate(weights(matsize))
-    allocate(matA(matsize, matsize), rhsB(matsize), kdnearest(nmax))
-    if (nobs2>0) allocate(kdnearest2(nmax2))
+    allocate(matA(matsize, matsize), rhsB(matsize), kdnearest(nmax), inear(nmax), tmpdist(nmax))
+    if (nobs2>0) allocate(kdnearest2(nmax2), inear2(nmax2), tmpdist2(nmax2))
 
     if (nsim>0) then
       call set_randpath()
@@ -256,160 +253,174 @@ program ppsgs
     else
       irandpath=[(ig, ig=1, ngrid)]
     end if
-
     ! calculate distance
     call setdist()
-
     if (facfile/='') then
       if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
       open(newunit=ifilefac, file=trim(facfile), status='replace')
       write(ifilefac, '(A,*(:" index",I0," weight",I0))') 'igrid nobs1 ngrid nobs2 std', (ii,ii,ii=1,nmax+nmax2)
     else
       ifilefac = 0
+      call open_output()
     end if
+
+    allocate(solverAP(matsize*(matsize+1)/2), solverB(matsize), IPIV(matsize))
 
 #ifdef __INTEL_COMPILER
     if (verbose) open (unit=6, carriagecontrol='fortran')
 #endif
 
     do ig = 1, ngrid
-
+      ! print*, "krige1100 ", ig, igrid(ig)
       ! search for the nearest obs
       if (verbose) call progress(real(ig)/real(ngrid))
       ! already evaluated grid cells
       mgrid = ig-1 ! minus 1 to exclude the cell itself
       if (nsim==0) then
         mgrid=0   ! if not a simulation, grid cell will not be included as obs
-      else
-        kdmask(nobs+mgrid) = .true.
+      else if (ig>1) then
+        if (.not. isnan(grid(ndim+1, mgrid))) kdmask(nobs+mgrid) = .true.
       end if
 
       xcell = robs(:ndim,nobs+ig)
       if (nobs+mgrid>nmax) then
-        ! print*, ig, 'search for neighbor1'
         call kdtree2_n_nearest(obstree,xcell,nmax,kdnearest,kdmask)
-        inear = kdnearest%idx
-        npp1 = nmax
-        npp1o = count(inear(1:npp1)<=nobs)
-        npp1g = npp1 - npp1o
-        call inssor(inear(1:npp1))
+        npp1o = 0
+        npp1g = 0
+        do ii = 1, nmax
+          if (kdnearest(ii)%idx<=nobs) then
+            npp1o = npp1o + 1
+            inear(npp1o) = kdnearest(ii)%idx
+          else
+            npp1g = npp1g + 1
+            inear(nmax-npp1g+1) = kdnearest(ii)%idx
+          end if
+        end do
       else
         ! use all points
         npp1o = nobs
         npp1g = mgrid
         npp1 = nobs + mgrid
-        inear = [(ii,ii=1,npp1)]
+        inear(1:npp1) = [(ii,ii=1,npp1)]
       end if
-
+      ! print*, "krige1800"
       if (nobs2>0) then
         if (nmax2<nobs2) then
-          ! print*, ig, 'search for neighbor2'
+          ! print*, "krige18001 ", 'search for neighbor2'
           npp2 = nmax2
           call kdtree2_n_nearest(obstree2,xcell,nmax2,kdnearest2)
-          inear2 = kdnearest2%idx
+          inear2(1:npp2) = kdnearest2%idx
         else
           npp2 = nobs2
-          inear2 = [(ii,ii=1,npp2)]
+          inear2(1:npp2) = [(ii,ii=1,npp2)]
         end if
       else
         npp2 = 0
       end if
-
-      tmpdist               = sdistn1(robs(:,inear ) ,robs(:,nobs+ig))
-      if (nobs2>0) tmpdist2 = sdistn1(rob2(:,inear2) ,robs(:,nobs+ig))
-
-      ! calculate the distance from the unknown grid cell to all data points
-      if (maxdist>0) then
-        npp   = count(tmpdist<=maxdist)
-        if (npp /= npp1) then
-          inear   = pack(inear, tmpdist<=maxdist)
-          tmpdist = pack(tmpdist, tmpdist<=maxdist)
-          npp1  = npp
-          npp1o = count(inear<=nobs)
-          npp1g = npp1 - npp1o
-        end if
-        if (nobs2>0) then
-          npp   = count(tmpdist2<=maxdist)
-          if (npp /= npp2) then
-            inear2 = pack(inear2, tmpdist2<=maxdist)
-            tmpdist2 = pack(tmpdist2, tmpdist2<=maxdist)
-            npp2 = npp
+      ! print*, "krige1900"
+      ! check if any data ~ grid colocated
+      tmpdist(1:npp1) = sdistn1(robs(:,inear(1:npp1) ) ,robs(:,nobs+ig))
+      if (nobs2>0) tmpdist2(1:npp2) = sdistn1(rob2(:,inear2(1:npp2)) ,robs(:,nobs+ig))
+      if (any(tmpdist(1:npp1)<verysmall)) then
+        weights=0.0
+        weights(1) = 1.0
+        npp1  = 1
+        npp1o = 1
+        npp1g = 0
+        npp2  = 0
+        nppd = 1
+        nppdu = 1
+        inear(1:1) = inear(minloc(tmpdist(1:npp1)))
+        std = 0.0
+      else
+        ! calculate the distance from the unknown grid cell to all data points
+        if (maxdist>0) then
+          npp   = count(tmpdist<=maxdist)
+          if (npp /= npp1) then
+            npp1  = npp
+            npp1o = count(inear<=nobs)
+            npp1g = npp1 - npp1o
+            inear(1:npp1)   = pack(inear  , tmpdist<=maxdist)
+            tmpdist(1:npp1) = pack(tmpdist, tmpdist<=maxdist)
+          end if
+          if (nobs2>0) then
+            npp   = count(tmpdist2<=maxdist)
+            if (npp /= npp2) then
+              npp2 = npp
+              inear2(1:npp2)   = pack(inear2  , tmpdist2<=maxdist)
+              tmpdist2(1:npp2) = pack(tmpdist2, tmpdist2<=maxdist)
+            end if
           end if
         end if
-      end if
+        ! print*, "krige2000"
+        npp = npp1 + npp2       ! total obs points
+        nppd  = npp + ndrift    ! obs points + drifts
+        nppdu = nppd + unbias   ! obs points + drifts + unbias
 
-      npp = npp1 + npp2       ! total obs points
-      nppd  = npp + ndrift    ! obs points + drifts
-      nppdu = nppd + unbias   ! obs points + drifts + unbias
+        ! construct linear system
+        matA = 0.0
+        rhsB = 0.0
+        ! print "(99I9)", nobs, nobs2, ngrid, nmax2, npp2, npp1o, npp2, ndrift, unbias
+        ! print*, 'start to build matrix', sdistn1(robs(:,inear (1+1:npp1o)  ), robs(:,1))
+        ! obs1
+        do ii=1, npp1o
+          kk = inear(ii)
+                          matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
+          if (npp1o  >ii) matA(ii+1:npp1o  , ii) = covfuc(vario , sdistn1(robs(1:ndim,inear (ii+1:npp1o)  ), robs(1:ndim,kk)))  ! print*, ii, "obs1 ~ obs1"
+          if (npp1g  > 0) matA(npp1o+1:npp1, ii) = covfuc(vario , sdistn1(robs(1:ndim,inear (npp1o+1:npp1)), robs(1:ndim,kk)))  ! print*, ii, "obs1 ~ grid"
+          if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(1:ndim,inear2(1:npp2      )), robs(1:ndim,kk)))  ! print*, ii, "obs1 ~ obs2"
+          if (ndrift > 0) matA(npp  +1:nppd, ii) = obsdrift(:,kk)                                                     ! print*, ii, "obsdrift"
+          if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
+                          rhsB(ii          : ii) = covfuc(vario , tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
+        end do
 
-      ! construct linear system
-      matA = 0.0
-      rhsB = 0.0
-      ! print "(99I9)", nobs, nobs2, ngrid, nmax2, npp2, npp1o, npp2, ndrift, unbias
-      ! print*, 'start to build matrix', sdistn1(robs(:,inear (1+1:npp1o)  ), robs(:,1))
-      ! obs1
-      do ii=1, npp1o
-        kk = inear(ii)
-                        matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
-        if (npp1o  >ii) matA(ii+1:npp1o  , ii) = covfuc(vario , sdistn1(robs(:,inear (ii+1:npp1o)  ), robs(:,kk)))  ! print*, ii, "obs1 ~ obs1"
-        if (npp1g  > 0) matA(npp1o+1:npp1, ii) = covfuc(vario , sdistn1(robs(:,inear (npp1o+1:npp1)), robs(:,kk)))  ! print*, ii, "obs1 ~ grid"
-        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(:,inear2(1:npp2      )), robs(:,kk)))  ! print*, ii, "obs1 ~ obs2"
-        if (ndrift > 0) matA(npp  +1:nppd, ii) = obsdrift(:,kk)                                                     ! print*, ii, "obsdrift"
-        if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
-                        rhsB(ii          : ii) = covfuc(vario , tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
-      end do
+        ! grids
+        do ii=npp1o+1, npp1
+          kk = inear(ii)
+                          matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
+          if (npp1   >ii) matA(ii   +1:npp1, ii) = covfuc(vario , sdistn1(robs(1:ndim,inear (ii+1:npp1)   ), robs(1:ndim,kk)))  ! print*, ii, "grid ~ grid"
+          if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(1:ndim,inear2(1:npp2      )), robs(1:ndim,kk)))  ! print*, ii, "grid ~ obs2"
+          if (ndrift > 0) matA(npp  +1:nppd, ii) = griddrift(:,kk)                                                    ! print*, ii, "griddrift"
+          if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
+                          rhsB(ii          : ii) = covfuc(vario,  tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
+        end do
 
-      ! grids
-      do ii=npp1o+1, npp1
-        kk = inear(ii)
-                        matA(ii          , ii) = cov0(1)                                                            ! print*, ii, "diagonal"
-        if (npp1   >ii) matA(ii   +1:npp1, ii) = covfuc(vario , sdistn1(robs(:,inear (ii+1:npp1)   ), robs(:,kk)))  ! print*, ii, "grid ~ grid"
-        if (npp2   > 0) matA(npp1 +1:npp , ii) = covfuc(varioc, sdistn1(rob2(:,inear2(1:npp2      )), robs(:,kk)))  ! print*, ii, "grid ~ obs2"
-        if (ndrift > 0) matA(npp  +1:nppd, ii) = griddrift(:,kk)                                                    ! print*, ii, "griddrift"
-        if (unbias > 0) matA(nppdu       , ii) = 1.0                                                                ! print*, ii, "unbias"
-                        rhsB(ii          : ii) = covfuc(vario,  tmpdist(ii:ii))                                     ! print*, ii, "right hand side"
-      end do
+        ! obs2
+        do ii=1, npp2
+          kk = inear2(ii)
+                          matA(npp1+ii      , npp1+ii) = cov0(3)                                                        ! print*, ii, "diagonal"
+          if (npp2   >ii) matA(npp1+ii+1:npp, npp1+ii) = covfuc(vario2, sdistn1(rob2(1:ndim,inear2(ii+1:npp2)),rob2(1:ndim,kk)))  ! print*, ii, "obs2 ~ obs2"
+          if (unbias > 0) matA(nppdu        , npp1+ii) = 1.0                                                            ! print*, ii, "unbias"
+                          rhsB(npp1+ii      : npp1+ii) = covfuc(varioc, tmpdist2(ii:ii))                                ! print*, ii, "right hand side"
+        end do
 
-      ! obs2
-      do ii=1, npp2
-        kk = inear2(ii)
-                        matA(npp1+ii      , npp1+ii) = cov0(3)                                                        ! print*, ii, "diagonal"
-        if (npp2   >ii) matA(npp1+ii+1:npp, npp1+ii) = covfuc(vario2, sdistn1(rob2(:,inear2(ii+1:npp2)),rob2(:,kk)))  ! print*, ii, "obs2 ~ obs2"
-        if (unbias > 0) matA(nppdu        , npp1+ii) = 1.0                                                            ! print*, ii, "unbias"
-                        rhsB(npp1+ii      : npp1+ii) = covfuc(varioc, tmpdist2(ii:ii))                                ! print*, ii, "right hand side"
-      end do
+        ! drift
+        if (ndrift > 0) rhsB(npp+1:nppd) = griddrift(:,ig)
 
-      ! drift
-      if (ndrift > 0) rhsB(npp+1:nppd) = griddrift(:,ig)
+        ! unbias
+        if (unbias > 0) rhsB(nppdu)      = 1.0
 
-      ! unbias
-      if (unbias > 0) rhsB(nppdu)      = 1
-
-      call krige()
-      if (correct_weight) then
-        where(weights(1:npp)<0.0) weights(1:npp)=0.0
-        weights(1:npp) = weights(1:npp) / sum(weights(1:npp))
+        call krige()
+        if (correct_weight) then
+          where(weights(1:npp)<0.0) weights(1:npp)=0.0
+          weights(1:npp) = weights(1:npp) / sum(weights(1:npp))
+        end if
+        std = sqrt(max(cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu)), 0.0))
       end if
       if (ifilefac==0) then
         ! save result to grid for exporting
-        obsval = [obs(ndim+1,inear(:npp1o)), grid(ndim+1, inear(npp1o+1:npp1)-nobs), obs2(ndim+1, inear2(1:npp2))]
-        if (npp2>0) then
-          avg2 = sum(obsval(npp1+1:npp)) / npp2
-          obsval(npp1+1:npp) = obsval(npp1+1:npp) + avg - avg2  ! ISAAKS and SRIVASTAVA, An Introduction to Applied Geostatistics, pp410
-        end if
-        grid(ndim+1, ig) = sum(weights(1:npp) * obsval(1:npp))
-        grid(ndim+2, ig) = cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu))
-        if (nsim>0) grid(ndim+1, ig) = grid(ndim+1, ig) + samples(ig) * grid(ndim+2, ig) ** 0.5
-        if (grid(ndim+1, ig) < vmin) grid(ndim+1, ig) = vmin
-        if (grid(ndim+1, ig) > vmax) grid(ndim+1, ig) = vmax
+        grid(ndim+1, ig) = weighted_average(samples(ig), std)
+        grid(ndim+2, ig) = std
+        ! save results to csv
+        if (writexy) write(iout, "(I0,*(:',',G0.12))") igrid(ig), grid(:ndim+2, ig)
       else
         ! save results to factor file
-        std = sqrt(cov0(1) - sum(rhsB(1:nppdu) * weights(1:nppdu)))
         write(ifilefac, '(4(I0,x),G0.12,*(:x,I0,x,F0.10))') irandpath(ig), npp1o, npp1g, npp2, std, &
           (inear(ii)     , weights(ii),     ii=      1,npp1o), &
           (inear(ii)-nobs, weights(ii),     ii=npp1o+1,npp1), &
           (inear2(ii)    , weights(npp1+ii),ii=      1,npp2)
       end if
+      ! if (ig==3) stop
     end do
 #ifdef __INTEL_COMPILER
     if (verbose) close(6)
@@ -646,81 +657,108 @@ program ppsgs
     ! print*, 'Building distance kdtree 1z'
 
     if (nobs2>0) then
-      rob2 = rotate(ndim, nobs2, obs2(1:ndim, :), centerloc)
-      obstree2 => kdtree2_create(rob2, sort=.false., rearrange=.false.)
+      rob2 = rotate(ndim, nobs2, obs2(1:ndim, 1:nobs2), centerloc)
+      obstree2 => kdtree2_create(rob2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
     end if
     ! print*, 'Building distance kdtree 2'
   end subroutine setdist
 
   subroutine krige()
-    real, allocatable       ::  AP(:), B(:)
-    integer, allocatable    ::  IPIV(:)
     integer                 ::  INFO
     character*256           ::  sig
     ! nppdu is the mat size ~ obs + drift + unbias
-    allocate(AP(nppdu*(nppdu+1)/2), B(nppdu), IPIV(nppdu))
+
     ! store the matrix to column compact form
     kk = 1
     do ii=1, nppdu
-      AP(kk:kk+ii-1) = real(matA(ii, 1:ii))
+      solverAP(kk:kk+ii-1) = matA(ii, 1:ii)
       kk = kk + ii
     end do
-    B = real(rhsB(1:nppdu))
-    call SSPSV( 'U', nppdu, 1, AP, IPIV, B, nppdu, INFO )
+    solverB = rhsB(1:nppdu)
+    call SSPSV( 'U', nppdu, 1, solverAP, IPIV, solverB, nppdu, INFO )
+    if (writemat) call write_matrix()
     if (INFO /= 0) then
-      open(newunit=ifile, file='matA.dat', status='replace')
-      do ii =1, nppdu
-        write(ifile, "(*(ES12.4))") matA(:nppdu, ii)
-      end do
-      close(ifile)
-      open(newunit=ifile, file='rhsB.dat', status='replace')
-      do ii =1, nppdu
-        write(ifile, "(*(ES12.4))") rhsB(ii)
-      end do
-      close(ifile)
-      open(newunit=ifile, file='index.dat', status='replace')
-      do ii =1, npp1
-        write(ifile, "(I0)") inear(ii)
-      end do
-      close(ifile)
-      if (npp2>0) then
-        open(newunit=ifile, file='index2.dat', status='replace')
-        do ii =1, npp2
-          write(ifile, "(I0)") inear2(ii)
-        end do
+      weights = ieee_value(weights(1), ieee_signaling_nan)
+      if (.not. neglect_error) then
+        call write_matrix()
+        write(sig, "(I0)") ig
+        call perr(new_line("")//'Failed to find solution of the linear system at cell '//trim(sig))
       end if
-      close(ifile)
-      write(sig, "(I0)") ig
-      call perr(new_line("")//'Failed to find solution of the linear system at cell '//trim(sig))
     end if
 
     if (correct_weight) then
-      weights(1:nppdu) = merge(B(1:nppdu), 0.0, B(1:nppdu)>0)
+      weights(1:nppdu) = merge(solverB(1:nppdu), 0.0, solverB(1:nppdu)>0)
       weights(1:nppdu) = weights(1:nppdu) / sum(weights(1:nppdu))
     else
-      weights(1:nppdu) = B(1:nppdu)
+      weights(1:nppdu) = solverB(1:nppdu)
     end if
   end subroutine krige
 
-  subroutine write_output()
+  subroutine open_output()
     character :: cname(3)=['x', 'y', 'z']
     if (trim(outfile)=='~') then
-      ifile = output_unit ! print to stdout
+      iout = output_unit ! print to stdout
     else
-      open(newunit=ifile, file=trim(outfile), status='replace')
+      open(newunit=iout, file=trim(outfile), status='replace')
     end if
-    if (writexy) then
-      write(ifile, '(99(A,:,","))') 'igrid', cname(1:ndim), 'estimate', 'variance'
-      do ig=1, ngrid
-        write(ifile, "(I0,*(:',',G0.12))") igrid(ig), grid(:ndim+2, ig)
-      end do
-    else
-      write(ifile, fomt) grid(ndim+1, :)
-    end if
+    if (writexy) write(iout, '(99(A,:,","))') 'igrid', cname(1:ndim), 'estimate', 'std'
+  end subroutine open_output
 
-    if (ifile /= output_unit) close(ifile)
+  subroutine write_output()
+    if (.not. writexy) write(iout, fomt) grid(ndim+1, :)
+    if (iout /= output_unit) close(ifile)
     if (verbose) print*, 'Results have been written successfully'
   end subroutine write_output
+
+  subroutine write_matrix()
+    character(len=20) :: sig
+    character(len=6 ) :: cname(3)=['x_orig', 'y_orig', 'z_orig']
+    character(len=9 ) :: rname(3)=['x_rotated', 'y_rotated', 'z_rotated']
+
+    write(sig, "(I0)") igrid(ig)
+    open(newunit=ifile, file='matA_'//trim(sig)//'.dat', status='replace')
+    do ii =1, nppdu
+      write(ifile, "(*(ES15.7))") matA(:nppdu, ii)
+    end do
+    close(ifile)
+    open(newunit=ifile, file='rhsB_'//trim(sig)//'.dat', status='replace')
+    do ii =1, nppdu
+      write(ifile, "(*(ES15.7))") rhsB(ii)
+    end do
+    close(ifile)
+
+    open(newunit=ifile, file='data_'//trim(sig)//'.csv', status='replace')
+    write(ifile, '(99(A,:,","))') 'source','id', cname(1:ndim), 'value', rname(1:ndim), 'dist_rotated', 'weight'
+    do ii =1, npp1o
+      write(ifile, "('obs ,',I0,*(:,',',ES15.8))") inear(ii),obs(:ndim+1,inear(ii)), robs(1:ndim,inear(ii)),tmpdist(ii),weights(ii)
+    end do
+    do ii=npp1o+1, npp1
+      write(ifile, "('grid ,'I0,*(:,',',ES15.8))") igrid(inear(ii)-nobs), grid(:ndim+1, inear(ii)-nobs), robs(1:ndim,inear(ii)),tmpdist(ii),weights(ii)
+    end do
+    do ii =1, npp2
+      write(ifile, "('obs2,',I0,*(:,',',ES15.8))") inear2(ii),obs2(:ndim+1,inear2(ii)),rob2(1:ndim,inear2(ii)),tmpdist2(ii),weights(npp1+ii)
+    end do
+    close(ifile)
+    ! call print_rotmat
+  end subroutine write_matrix
+
+  function weighted_average(sample, std)
+    real              :: weighted_average
+    real              :: sample, std
+    real, allocatable :: obsval(:)
+
+    obsval = [obs(ndim+1,inear(:npp1o)), grid(ndim+1, inear(npp1o+1:npp1)-nobs), obs2(ndim+1, inear2(1:npp2))]
+    if (npp2>0) then
+      avg  = sum(obs(ndim+1,inear(:npp1o))) / npp1o
+      avg2 = sum(obsval(npp1+1:npp)) / npp2
+      obsval(npp1+1:npp) = obsval(npp1+1:npp) + avg - avg2  ! ISAAKS and SRIVASTAVA, An Introduction to Applied Geostatistics, pp410
+    end if
+
+    weighted_average = sum(weights(1:npp) * obsval(1:npp))
+    if (nsim>0) weighted_average = weighted_average + sample * std
+    weighted_average = max(min(weighted_average, vmax), vmin)
+    deallocate(obsval)
+  end function
 
   subroutine showhelp()
     integer    :: Mandatory = 2
@@ -743,4 +781,155 @@ program ppsgs
     print "(A)", ' '
     stop
     end subroutine showhelp
+
+    subroutine random_seed_initialize (key)
+      !*****************************************************************************
+      !
+      !! random_seed_initialize() initializes the FORTRAN90 random number generator.
+      !
+      !  Discussion:
+      !
+      !    This is the stupidest, most awkward procedure I have seen!
+      !
+      !  Modified:
+      !
+      !    27 October 2021
+      !
+      !  Author:
+      !
+      !    John Burkardt
+      !
+      !  Input:
+      !
+      !    integer KEY: an initial seed for the random number generator.
+      !
+      implicit none
+
+      integer key
+      integer, allocatable :: iseed(:)
+      integer seed_size
+
+      if (key<=0) key = huge(seed_size) / 17
+      call random_seed ( size = seed_size )
+      allocate ( iseed(seed_size) )
+      iseed(1:seed_size) = key
+      call random_seed ( put = iseed )
+      deallocate ( iseed )
+
+      return
+    end subroutine random_seed_initialize
+
+    subroutine r8vec_normal_01 ( n, x )
+
+      !*****************************************************************************80
+      !
+      !! r8vec_normal_01() returns a unit pseudonormal R8VEC.
+      !
+      !  Discussion:
+      !
+      !    An R8VEC is an array of double precision real values.
+      !
+      !    The standard normal probability distribution function (PDF) has
+      !    mean 0 and standard deviation 1.
+      !
+      !  Licensing:
+      !
+      !    This code is distributed under the MIT license.
+      !
+      !  Modified:
+      !
+      !    18 May 2014
+      !
+      !  Author:
+      !
+      !    John Burkardt
+      !
+      !  Input:
+      !
+      !    integer N, the number of values desired.
+      !
+      !  Output:
+      !
+      !    real ( kind = rk ) X(N), a sample of the standard normal PDF.
+      !
+      !  Local:
+      !
+      !    real ( kind = rk ) R(N+1), is used to store some uniform
+      !    random values.  Its dimension is N+1, but really it is only needed
+      !    to be the smallest even number greater than or equal to N.
+      !
+      !    integer X_LO_INDEX, X_HI_INDEX, records the range
+      !    of entries of X that we need to compute
+      !
+
+        integer n
+        integer m
+        real  r(n+1)
+        real , parameter :: r8_pi = 4.0*atan(1.0)
+        real  x(n)
+        integer x_hi_index
+        integer x_lo_index
+      !
+      !  Record the range of X we need to fill in.
+      !
+
+        if (n < 1) then
+          print*, 'N must be larger than 0'
+          stop 1
+        end if
+        x_lo_index = 1
+        x_hi_index = n
+      !
+      !  If we need just one new value, do that here to avoid null arrays.
+      !
+        if ( x_hi_index - x_lo_index + 1 == 1 ) then
+
+          call random_number ( harvest = r(1:2) )
+
+          x(x_hi_index) = &
+            sqrt ( - 2.0e+00 * log ( r(1) ) ) * cos ( 2.0e+00 * r8_pi * r(2) )
+      !
+      !  If we require an even number of values, that's easy.
+      !
+        else if ( mod ( x_hi_index - x_lo_index, 2 ) == 1 ) then
+
+          m = ( x_hi_index - x_lo_index + 1 ) / 2
+
+          call random_number ( harvest = r(1:2*m) )
+
+          x(x_lo_index:x_hi_index-1:2) = &
+            sqrt ( - 2.0e+00 * log ( r(1:2*m-1:2) ) ) &
+            * cos ( 2.0e+00 * r8_pi * r(2:2*m:2) )
+
+          x(x_lo_index+1:x_hi_index:2) = &
+            sqrt ( - 2.0e+00 * log ( r(1:2*m-1:2) ) ) &
+            * sin ( 2.0e+00 * r8_pi * r(2:2*m:2) )
+      !
+      !  If we require an odd number of values, we generate an even number,
+      !  and handle the last pair specially, storing one in X(N), and
+      !  saving the other for later.
+      !
+        else
+
+          x_hi_index = x_hi_index - 1
+
+          m = ( x_hi_index - x_lo_index + 1 ) / 2 + 1
+
+          call random_number ( harvest = r(1:2*m) )
+
+          x(x_lo_index:x_hi_index-1:2) = &
+            sqrt ( - 2.0e+00 * log ( r(1:2*m-3:2) ) ) &
+            * cos ( 2.0e+00 * r8_pi * r(2:2*m-2:2) )
+
+          x(x_lo_index+1:x_hi_index:2) = &
+            sqrt ( - 2.0e+00 * log ( r(1:2*m-3:2) ) ) &
+            * sin ( 2.0e+00 * r8_pi * r(2:2*m-2:2) )
+
+          x(n) = sqrt ( - 2.0e+00 * log ( r(2*m-1) ) ) &
+            * cos ( 2.0e+00 * r8_pi * r(2*m) )
+
+        end if
+
+        return
+      end
   end program

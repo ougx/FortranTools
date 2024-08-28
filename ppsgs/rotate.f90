@@ -50,11 +50,12 @@ if(.not. scaling) then
     rotmat(:,3) = [0.0, 0.0, 1.0]
     return
 end if
-if(ang1.ge.0.0.and.ang1.lt.270.0) then
-    alpha = (90.0   - ang1) * DEG2RAD
-else
-    alpha = (450.0  - ang1) * DEG2RAD
-endif
+! if(ang1.ge.0.0.and.ang1.lt.270.0) then
+!     alpha = (90.0   - ang1) * DEG2RAD
+! else
+!     alpha = (450.0  - ang1) * DEG2RAD
+! endif
+alpha =        ang1 * DEG2RAD
 beta  = -1.0 * ang2 * DEG2RAD
 theta =        ang3 * DEG2RAD
 !
@@ -71,13 +72,13 @@ cost  = cos(theta)
 !
 afac1 = 1.0 / max(anis1,EPSLON)
 afac2 = 1.0 / max(anis2,EPSLON)
-rotmat(1,1) =       (cosb * cosa)
-rotmat(1,2) =       (cosb * sina)
-rotmat(1,3) =       (-sinb)
-rotmat(2,1) = afac1*(-cost*sina + sint*sinb*cosa)
-rotmat(2,2) = afac1*(cost*cosa + sint*sinb*sina)
-rotmat(2,3) = afac1*( sint * cosb)
-rotmat(3,1) = afac2*(sint*sina + cost*sinb*cosa)
+rotmat(1,1) = afac1*(cosb * cosa)
+rotmat(1,2) = afac1*(cosb * sina)
+rotmat(1,3) = afac1*(-sinb)
+rotmat(2,1) =       (-cost*sina + sint*sinb*cosa)
+rotmat(2,2) =       ( cost*cosa + sint*sinb*sina)
+rotmat(2,3) =       ( sint * cosb)
+rotmat(3,1) = afac2*( sint*sina + cost*sinb*cosa)
 rotmat(3,2) = afac2*(-sint*cosa + cost*sinb*sina)
 rotmat(3,3) = afac2*(cost * cosb)
 
@@ -94,7 +95,7 @@ end if
 write(iiout, *) ''
 write(iiout, *) 'Rotation matrix:'
 write(iiout, '(A,5F10.3)') ' Parameters:', ang1,ang2,ang3,anis1,anis2
-write(iiout, '(3F10.3)') rotmat
+write(iiout, '(3F15.10)') rotmat
 write(iiout, *) ''
 end subroutine
 
@@ -118,7 +119,7 @@ end if
 ! print "(2F10.2)", coord2
 if (scaling) then
     do idim=1, ndim
-        coord2(idim,:) = [(sum(rotmat(1:ndim, idim)*coords(1:ndim,ipnt)), ipnt=1, npnt)]
+        coord2(idim,1:npnt) = [(sum(rotmat(idim, 1:ndim)*coords(1:ndim,ipnt)), ipnt=1, npnt)]
     end do
 else
     coord2 = coords
@@ -152,4 +153,53 @@ function rotated_dist(ndim, coord1, coord2) result(res)
 
     res = sqrt(sum(rotate(ndim, 1, coord1, coord2) ** 2))
 end function
+
+real function sqdist(x1,y1,z1,x2,y2,z2)
+!-----------------------------------------------------------------------
+!
+!    Squared Anisotropic Distance Calculation Given Matrix Indicator
+!    ***************************************************************
+!
+! This routine calculates the anisotropic distance between two points
+!  given the coordinates of each point and a definition of the
+!  anisotropy.
+!
+!
+! INPUT VARIABLES:
+!
+!   x1,y1,z1         Coordinates of first point
+!   x2,y2,z2         Coordinates of second point
+!   ind              The rotation matrix to use
+!   MAXROT           The maximum number of rotation matrices dimensioned
+!   rotmat           The rotation matrices
+!
+!
+!
+! OUTPUT VARIABLES:
+!
+!   sqdist           The squared distance accounting for the anisotropy
+!                      and the rotation of coordinates (if any).
+!
+!
+! NO EXTERNAL REFERENCES
+!
+!
+!-----------------------------------------------------------------------
+     real cont,dx,dy,dz
+!
+! Compute component distance vectors and the squared distance:
+!
+      dx = dble(x1 - x2)
+      dy = dble(y1 - y2)
+      dz = dble(z1 - z2)
+      sqdist = 0.0
+      do i=1,3
+            cont   = rotmat(i,1) * dx &
+                   + rotmat(i,2) * dy &
+                   + rotmat(i,3) * dz
+            sqdist = sqdist + cont * cont
+      end do
+      return
+      end
+
 end module
