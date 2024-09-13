@@ -19,7 +19,7 @@ module variogram
     n = size(dist)
     allocate(covfuc(n))
     covfuc = 0.0
-    hr = dist / va%range
+    allocate(hr, source=dist/va%range)
 
     select case (va%vtype)
     case('sph'); do i = 1, n; if (hr(i)==0.) then; covfuc(i) = 1.0; elseif (dist(i)<va%range) then; covfuc(i) = 1.0 - 1.5 * hr(i) + 0.5 * hr(i) ** 3; end if; end do
@@ -36,6 +36,7 @@ module variogram
     if (va%nugget > 0) then
         where (dist==0) covfuc = covfuc + va%nugget
     end if
+    deallocate(hr)
   end function
 
 

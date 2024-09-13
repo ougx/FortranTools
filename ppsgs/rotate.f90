@@ -55,9 +55,9 @@ end if
 ! else
 !     alpha = (450.0  - ang1) * DEG2RAD
 ! endif
-alpha =        ang1 * DEG2RAD
-beta  = -1.0 * ang2 * DEG2RAD
-theta =        ang3 * DEG2RAD
+alpha = -ang1 * DEG2RAD
+beta  = -ang2 * DEG2RAD
+theta =  ang3 * DEG2RAD
 !
 ! Get the required sines and cosines:
 !

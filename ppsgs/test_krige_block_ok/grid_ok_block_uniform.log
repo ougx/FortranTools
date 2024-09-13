@@ -1,0 +1,7 @@
+ Reading OBS in "..\test_data\pc2d.csv"
+ Reading GRID in "..\test_data\gridblock2d.csv"
+ No simulation. All samples are set to 0.
+ Building distance kdtree ...
++ 100% |**********| 
+ Results have been written successfully
+ PPSGS exited peacefully.

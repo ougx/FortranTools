@@ -1,33 +1,42 @@
 program test
 use rotation
-double precision, allocatable :: a(:,:),b(:,:),c(:,:)
-double precision, allocatable :: results(:,:)
-integer                       :: ndim=2, ii, jj
-a = reshape([1,2], [2,1])
-b = reshape([1,2,3,4], [2,2])
-c = reshape([3,4,5,6,7,8], [2,3])
+
+real, allocatable :: a(:,:),b(:,:),c(:,:)
+real, allocatable :: results(:,:)
+
+integer                       :: ndim=3, ii, jj
+
+anis2 = 0.1
 call setrot()
 
-print*, a(1:ndim, 1), b(1:ndim, 1), rotated_dist(ndim, a(1:ndim, 1), b(1:ndim, 2))
-print*, b(1:ndim, 1), c(1:ndim, 3), rotated_dist(ndim, b(1:ndim, 1), c(1:ndim, 3))
-results = cdist(a, b)
-print*, 'results1', results
-results = cdist(b, c)
-print*, 'results1', results
-contains
-  function cdist(coord1, coord2)
-    integer                       :: n1, n2
-    double precision              :: coord1(:,:), coord2(:,:)
-    double precision, allocatable :: cdist(:,:)
-    n1 = size(coord1, dim=2)
-    n2 = size(coord2, dim=2)
+a = reshape([0,0,0], [ndim,1])
+b = reshape([0,0,1,1,0,0], [ndim,2])
+c = reshape([3,4,5,6,7,8,1,1,1], [ndim,3])
 
-    allocate(cdist(n1,n2))
-    do ii = 1, n1
-      do jj = 1, n2
-        cdist(ii, jj) = rotated_dist(ndim, coord1(1:ndim, ii), coord2(1:ndim, jj))
-      end do
-    end do
-  end function cdist
+a = rotate(ndim, 1, a)
+b = rotate(ndim, 2, b)
+c = rotate(ndim, 3, c)
+
+print "(10F10.2)", sdistn1(b, a(:,1))
+print "(10F10.2)", sdistn1(c, a(:,1))
+print "(10F10.2)", (sum(([3,4,50])**2))**0.5,(sum(([6,7,80])**2))**0.5,(sum(([1,1,10])**2))**0.5
+
+contains
+
+  ! calculate distance between multiple points to one point
+  function sdist1(coord1, coord2) result(res)
+    real              :: coord1(:), coord2(:)
+    real              :: res
+    res = sqrt(sum((coord1(1:ndim) - coord2(1:ndim)) ** 2))
+  end function
+
+  function sdistn1(coords, coord2) result(res)
+    real              :: coords(:,:), coord2(:)
+    real, allocatable :: res(:)
+    ! local
+    integer                       :: n1
+    n1 = size(coords, dim=2)
+    res = [(sdist1(coords(:, ii), coord2), ii = 1, n1)]
+  end function
 
 end program
