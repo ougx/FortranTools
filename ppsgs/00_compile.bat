@@ -9,3 +9,5 @@ rem -fdefault-real-8
   ppsgs.F90
 
 rem  ..\sorting\mrgref.f90  ^
+
+pause

@@ -799,7 +799,12 @@ program ppsgs
       ! print*, 'Building distance kdtree 1a'
       ! print "(3F10.2)", centerloc
       ! print "(3F10.2)", robs(:,nobs-10:nobs)
+      ! print*, 'Building distance kdtree 1', nobs
+      ! do ii=1, nobs
+      !   print*, robs(:,ii)
+      ! end do
       obstree => kdtree2_create(robs(:,:nobs), sort=.false., rearrange=.false.)
+      ! print*, 'Building distance kdtree 1a'
     end if
     ! print*, 'Building distance kdtree 1z'
 
