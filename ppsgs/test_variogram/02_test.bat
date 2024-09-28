@@ -1,17 +1,8 @@
-@echo off
-rm fac.dat*
-set start=%time%
-..\ppsgs.exe -d 3 1206 4800 66339 0 ^
-	-of "..\test_data\obs3d_clay.csv" ^
-	-o2 "..\test_data\aem3d_clay.csv" ^
-	-gf "..\test_data\gridxyz.csv" ^
-	-v1 sph 5000.0 0.12 0.0 ^
-	-vc sph 5000.0 0.04 0.05 ^
-	-v2 sph 5000.0 0.068 0.0  ^
-	-u --anis2 0.5 -bd 0.0 1.0^
-	--nmax 30 --nmax2 30^
-	-v -xy grid.csv
+call ..\..\compiler_setting_gfortran.bat
 
+%ff%  -fdefault-real-8 -o test2 variogram.f90 test2.f90 
+set start=%time%
+test2.exe 
 set end=%time%
 set options="tokens=1-4 delims=:.,"
 for /f %options% %%a in ("%start%") do set start_h=%%a&set /a start_m=100%%b %% 100&set /a start_s=100%%c %% 100&set /a start_ms=100%%d %% 100
@@ -30,5 +21,6 @@ if 1%ms% lss 100 set ms=0%ms%
 :: Mission accomplished
 set /a totalsecs = %hours%*3600 + %mins%*60 + %secs%
 echo command took %hours%:%mins%:%secs%.%ms% (%totalsecs%.%ms%s total)
+
 
 pause

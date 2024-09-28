@@ -16,3 +16,5 @@
 *.mod
 *.exe
 *.o
+/ppsgs/paper
+ppsgs/test_variogram.7z

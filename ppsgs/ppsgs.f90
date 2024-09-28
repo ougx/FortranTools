@@ -37,7 +37,7 @@ program ppsgs
   real, allocatable       ::  solverAP(:), solverB(:)
   integer, allocatable    ::  IPIV(:)
 
-  type(variog)     :: vario, varioc, vario2
+  class(variog), pointer  :: vario1=>null(), varioc=>null(), vario2=>null()
   ! local
   integer         :: matsize, npp, npp1, npp1o, npp1g, npp2, nppd, nppdu, mblock
   integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim, iout, ib, ntp
@@ -49,12 +49,12 @@ program ppsgs
 
 
   allocate(opts, source=(/&
-    option_s("dim"    ,     "d", 5, "space dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
-    option_s("obsfile",    "of", 1, "observation data file. the columns should be x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used."), &
+    option_s("dim"    ,     "d", 5, "define spatial dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
+    option_s("obsfile",    "of", 1, "observation data file. the columns should be id,x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used."), &
     option_s("facfile",    "ff", 1, "interpolation factor file. the columns should be gindex,nobs,iobs1,iobs2... in that file. This file will be generated using this tool when grid file is defined."), &
-    option_s("gridfile",   "gf", 1, "grid file. the columns should be x,(y,z) in that file. drift value columns can be added if drift is used."), &
-    option_s("blockfile",  "bf", 1, "optional block file for block kriging; the content of this file is the counts of points used for each block."), &
-    option_s("blockweight","bw", 0, "if point weighting should be read from the grid file."), &
+    option_s("gridfile",   "gf", 1, "grid file. the columns should be id,x,(y,z) in that file. drift value columns can be added if drift is used."), &
+    option_s("blockfile",  "bf", 1, "optional block file for block kriging; the content of this file is id,x,(y,z) and the counts of points used for each block."), &
+    option_s("blockweight","bw", 0, "read point weights for block kriging from the grid file; default is equal weighting for each point."), &
     option_s("pathfile",   "pf", 1, "a file contain the indices of the calculation path, if not defined for sinluation, a random path will be generated"), &
     option_s("samfile",    "sf", 1, "a file contain samples from standard normal distribution."), &
     option_s("obsfile2",   "o2", 1, "secondary observation data file for the covariate. the columns should be x,(y,z),obsvalue in that file."), &
@@ -68,7 +68,7 @@ program ppsgs
     option_s("ang3",       "a3", 1, "set third rotation angle; default is 0."), &
     option_s("anis1",      "s1", 1, "set first anisotropy ratio; default is 1."), &
     option_s("anis2",      "s2", 1, "set second anisotropy ratio; default is 1."), &
-    option_s("vario",      "v1", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin."), &
+    option_s("vario1",     "v1", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin."), &
     option_s("vario2",     "v2", 4, "set variogram for the secondary covariate."), &
     option_s("varioc",     "vc", 4, "set cross-variogram between the primary and secondary variables."), &
     option_s("bounds",     "bd", 2, "set the lower and upper bounds, if not set, the simulation is unbounded."), &
@@ -121,9 +121,6 @@ program ppsgs
   showargs = .false.
   iblockpntweight = 0
   blocksize = zero
-  vario %vtype = "lin"; vario %range = one; vario %sill = one; vario %nugget = zero
-  varioc%vtype = "lin"; varioc%range = one; varioc%sill = one; varioc%nugget = zero
-  vario2%vtype = "lin"; vario2%range = one; vario2%sill = one; vario2%nugget = zero
 
   ! check if verbose is set
   do
@@ -186,9 +183,9 @@ program ppsgs
       case("bs"); read(optarg, *) blocksize(:ndim)
       case("md"); read(optarg, *) maxdist
 
-      case("v1"); read(optarg, *) vario ; cov0(1) = vario %sill + vario %nugget
-      case("vc"); read(optarg, *) varioc; cov0(2) = varioc%sill + varioc%nugget
-      case("v2"); read(optarg, *) vario2; cov0(3) = vario2%sill + vario2%nugget
+      case("v1"); vario1=>get_vgm(optarg); cov0(1) = vario1%covfuc(zero)
+      case("vc"); varioc=>get_vgm(optarg); cov0(2) = varioc%covfuc(zero)
+      case("v2"); vario2=>get_vgm(optarg); cov0(3) = vario2%covfuc(zero)
 
       case("fm"); read(optarg, *) fomt
 
@@ -234,7 +231,7 @@ program ppsgs
   call readobs(1)
   if (nobs2>0) call readobs(2)
   if (gridfile /= "") call readgrid()
-  call setblock()
+  call set_block()
   call random_seed_initialize(seed)
   call set_samples()
 
@@ -331,7 +328,7 @@ program ppsgs
         cov00block = zero
         gqdelxyz(1:ndim, :) = rotate(ndim, ngq, gqdelxyz(1:ndim, :))
         do ii=1, ngq
-          cov00block = cov00block + gqweight(ii) * sum(covfuc(vario , sdistn1(gqdelxyz(1:ndim, 1:ngq), gqdelxyz(1:ndim, ii))) * gqweight(1:ngq))
+          cov00block = cov00block + gqweight(ii) * sum(vario1%covfuc(sdistn1(gqdelxyz(1:ndim, 1:ngq), gqdelxyz(1:ndim, ii))) * gqweight(1:ngq))
         end do
       end if
     end if
@@ -343,7 +340,7 @@ program ppsgs
     end do
 
     ! calculate distance
-    call setdist()
+    call set_dist()
     if (facfile/='') then
       if (verbose) print*, 'Factors written in "'//trim(facfile)//'"'
       open(newunit=ifilefac, file=trim(facfile), status='replace')
@@ -427,7 +424,7 @@ program ppsgs
         nppd = 1
         nppdu = 1
         npp = 1
-        std = sqrt(vario%nugget) ! measurement error
+        std = sqrt(vario1%nugget) ! measurement error
       else
         ! calculate the distance from the unknown grid cell to all data points
         if (maxdist>0) then
@@ -465,23 +462,21 @@ program ppsgs
         do ii=1, npp1
           xcell = robs(:,inear(ii))
           matA(ii         , ii) = cov0(1)                                                                           ! print*, ii, "diagonal"
-          matA(ii  +1:npp1, ii) = covfuc(vario , sdistn1(robs (:,inear (ii+1:npp1)), xcell))                        ! print*, ii, "obs1 ~ obs1&grid"
-          ! rhsB(ii)          = sum(covfuc(vario , sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)))/iblock(1,ib)  ! print*, ii, "right hand side/block mean"
+          matA(ii  +1:npp1, ii) = vario1%covfuc(sdistn1(robs (:,inear (ii+1:npp1)), xcell))                        ! print*, ii, "obs1 ~ obs1&grid"
           rhsB(ii)          = sum( &
-            covfuc(vario , sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib))) ! print*, ii, "right hand side/block mean"
+           vario1%covfuc(sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib))) ! print*, ii, "right hand side/block mean"
         end do
 
         ! obs2
         do kk=1, npp2
           ii = kk + npp1
           xcell = rob2(:,inear2(kk))
-          matA(ii, 1:npp1) = covfuc(varioc, sdistn1(robs(:,inear(1:npp1)), xcell))                                ! print*, ii, "obs1 ~ obs2"
+          matA(ii, 1:npp1) = varioc%covfuc(sdistn1(robs(:,inear(1:npp1)), xcell))                                ! print*, ii, "obs1 ~ obs2"
 
           matA(ii      ,ii) = cov0(3)                                                                            ! print*, ii, "diagonal"
-          matA(ii+1:npp,ii) = covfuc(vario2, sdistn1(rob2(:,inear2(kk+1:npp2)), xcell))                          ! print*, ii, "obs2 ~ obs2"
-          ! rhsB(ii)       = sum(covfuc(varioc, sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)))/iblock(1,ib)   ! print*, ii, "right hand side/block mean"
+          matA(ii+1:npp,ii) = vario2%covfuc(sdistn1(rob2(:,inear2(kk+1:npp2)), xcell))                          ! print*, ii, "obs2 ~ obs2"
           rhsB(ii)          = sum( &
-            covfuc(varioc, sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib)))                                                   ! print*, ii, "right hand side/block mean"
+          varioc%covfuc(sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), xcell)) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib)))                                                   ! print*, ii, "right hand side/block mean"
         end do
 
         ! drift
@@ -513,7 +508,7 @@ program ppsgs
           cov00 = zero
           do ii=iblock(2,ib), iblock(3,ib)
             cov00 = cov00 + grid(iblockpntweight, ii) * &
-                    sum(covfuc(vario , sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), rgrid(1:ndim,ii))) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib)))
+                    sum(vario1%covfuc(sdistn1(rgrid(:,iblock(2,ib):iblock(3,ib)), rgrid(1:ndim,ii))) * grid(iblockpntweight, iblock(2,ib):iblock(3,ib)))
           end do
         end if
         std = sqrt(max(cov00 - sum(rhsB(1:nppdu) * weights(1:nppdu)), zero))
@@ -656,7 +651,7 @@ program ppsgs
     if (iblockpntweight==0) grid(ndim+1,:) = one
   end subroutine readgrid
 
-  subroutine setblock()
+  subroutine set_block()
     ! reading blocks file
     if (blockfile=="") then
       nblock = ngrid
@@ -685,7 +680,7 @@ program ppsgs
       iblock(2,ib) = iblock(3,ib-1)+1
       iblock(3,ib) = iblock(2,ib  )+iblock(1,ib)-1
     end do
-  end subroutine setblock
+  end subroutine set_block
 
   subroutine readobs(ivar)
     ! reading OBS file
@@ -777,7 +772,7 @@ program ppsgs
     stop
   end subroutine perr
 
-  subroutine setdist()
+  subroutine set_dist()
     real, allocatable :: centerloc(:)
     if (verbose) print*, 'Building distance kdtree ...'
 
@@ -813,7 +808,7 @@ program ppsgs
       obstree2 => kdtree2_create(rob2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
     end if
     ! print*, 'Building distance kdtree 2'
-  end subroutine setdist
+  end subroutine set_dist
 
   subroutine solve_matrix()
     integer                 ::  INFO
@@ -1006,32 +1001,33 @@ program ppsgs
     print "(A,G0)", " vmin                   : ", vmin
     print "(A,G0)", " vmax                   : ", vmax
     print "(A,G0)", " maxdist                : ", maxdist
-    print        *,  "variogram model 1      : ", vario
-    print        *,  "variogram model cross  : ", varioc
-    print        *,  "variogram model 2      : ", vario2
+    print        *,  "variogram model 1      : ", vario1%vtype,vario1%range,vario1%sill,vario1%nugget
+    print        *,  "variogram model cross  : ", varioc%vtype,varioc%range,varioc%sill,varioc%nugget
+    print        *,  "variogram model 2      : ", vario2%vtype,vario2%range,vario2%sill,vario2%nugget
     print "(A,A )", " Output format          : ", trim(fomt)
     print "(A   )", "================== End Configuration =================="
     print "(A   )", ""
   end subroutine showoptions
 
   subroutine showhelp()
-    integer    :: Mandatory = 2
+    integer, parameter    :: Mandatory = 2
     print "(A)", ''
     print "(A)", ''
-    print "(A)", ' ppsgs -d ndim nobs ngrid nobs2 ndrift -o obsfile [-g gridfile] [-f facfile] [-o2 obsfile2] [options] [output]'
+    print "(A)", ' ppsgs -d ndim nobs ngrid nobs2 ndrift -of obsfile [-gf gridfile] [-ff facfile] [-o2 obsfile2] [options] [output]'
     print "(A)", ''
-    print "(A)", '   Generate sequential gaussian simulation.'
+    print "(A)", '   Perform Kriging or Sequential Gaussian Simulation.'
+    print "(A)", '   Developed by mou@sspa.com.'
     print "(A)", ' '
     print "(A)", '   Arguments:'
     do ii=1, Mandatory
-      print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//trim(opts(ii)%description)
+      print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//'  '//trim(opts(ii)%description)
     end do
     print "(A)", ' '
     print "(A)", '   Optional arguments:'
     do ii=Mandatory+1, size(opts)
-      print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//trim(opts(ii)%description)
+      print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//'  '//trim(opts(ii)%description)
     end do
-    print "(A)", '      output               output file name. If output=="~" or omitted, output will print to screen.'
+    print "(A)", '      output                 output file name. If output=="~" or omitted, output will print to screen.'
     print "(A)", ' '
     stop
   end subroutine showhelp

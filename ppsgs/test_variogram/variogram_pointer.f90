@@ -2,13 +2,20 @@ module variogram
 
   real, parameter   :: pi = 3.141592653589793e0
 
+  !abstract interface
+  !  function corefunc_if(rdist) result(res)
+  !    real, intent(in) :: rdist
+  !    real             :: res
+  !  end function corefunc_if
+  !end interface
+
   type, abstract :: variog
-    character(3) :: vtype
+    !character(3) :: vtype
     real         :: range
     real         :: sill
     real         :: nugget
   contains
-    !procedure           :: initialize
+    procedure           :: initialize
     procedure, NOPASS   :: corefunc
     procedure           :: covfuc
   end type
@@ -50,23 +57,32 @@ module variogram
 
   contains
 
-  function get_vgm(spec) result(res)
-    character(*), intent(in) :: spec
-    character(3)             :: vtype
-    real                     :: sill, range, nugget
+  function get_vgm(vtype, range, sill, nugget) result(res)
+    character(3), intent(in) :: vtype
+    real        , intent(in) :: sill, range, nugget
     class(variog), pointer   :: res
-    read(spec, *) vtype, range, sill, nugget
+
     select case (vtype)
-    case('sph'); allocate(res, source=variog_sph(vtype, range, sill, nugget))
-    case('exp'); allocate(res, source=variog_exp(vtype, range, sill, nugget))
-    case('hol'); allocate(res, source=variog_hol(vtype, range, sill, nugget))
-    case('gau'); allocate(res, source=variog_gau(vtype, range, sill, nugget))
-    case('pow'); allocate(res, source=variog_pow(vtype, range, sill, nugget))
-    case('cir'); allocate(res, source=variog_cir(vtype, range, sill, nugget))
-    case('lin'); allocate(res, source=variog_lin(vtype, range, sill, nugget))
+    case('sph'); allocate(res, source=variog_sph(range, sill, nugget))
+    case('exp'); allocate(res, source=variog_exp(range, sill, nugget))
+    case('hol'); allocate(res, source=variog_hol(range, sill, nugget))
+    case('gau'); allocate(res, source=variog_gau(range, sill, nugget))
+    case('pow'); allocate(res, source=variog_pow(range, sill, nugget))
+    case('cir'); allocate(res, source=variog_cir(range, sill, nugget))
+    case('lin'); allocate(res, source=variog_lin(range, sill, nugget))
     case default; print*, 'Unknown variogram model.'; stop
     end select
   end function
+
+  subroutine initialize(this, range, sill, nugget)
+    class(variog)            :: this
+    real        , intent(in) :: sill, range, nugget
+
+    this%sill = sill
+    this%range = range
+    this%nugget = nugget
+
+  end subroutine
 
   elemental function covfuc(this, dist) result(res)
     class(variog), intent(in)     :: this
