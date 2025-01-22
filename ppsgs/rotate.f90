@@ -1,4 +1,5 @@
 module rotation
+use common, only: DEG2RAD, EPSLON
 real      :: rotmat(3,3)
 real      :: ang1=0e0,ang2=0e0,ang3=0e0,anis1=1e0,anis2=1e0
 logical   :: scaling = .false.
@@ -27,7 +28,6 @@ subroutine setrot()
 !
 ! Author: C. Deutsch                                Date: September 1989
 !-----------------------------------------------------------------------
-real, parameter         :: DEG2RAD = 4.0*atan(1.0)/180.0, EPSLON = 1.e-10
 real                    :: alpha, beta, theta, &
                                 sina, sinb, sint, cosa, cosb, cost, &
                                 afac1, afac2
@@ -106,23 +106,23 @@ real                    :: coord1(ndim, npnt)
 real                    :: coord2(ndim, npnt)
 real, optional          :: origin(ndim)
 ! local
-integer                 :: idim, ipnt
-real, allocatable       :: coords(:,:)
+integer                 :: idim
 
-coords = coord1
+
 if (present(origin)) then
   do idim=1, ndim
-    coords(idim,:) = coords(idim,:) - origin(idim)
+    coord2(idim,:) = coord1(idim,:) - origin(idim)
   end do
+else
+  coord2 = coord1
 end if
 
 ! print "(2F10.2)", coord2
 if (scaling) then
-    do idim=1, ndim
-        coord2(idim,1:npnt) = [(sum(rotmat(idim, 1:ndim)*coords(1:ndim,ipnt)), ipnt=1, npnt)]
-    end do
-else
-    coord2 = coords
+    coord2 = matmul(rotmat(1:ndim,1:ndim), coord2(1:ndim,:))
+    !do idim=1, ndim
+    !    coord2(idim,1:npnt) = [(sum(rotmat(idim, 1:ndim)*coords(1:ndim,ipnt)), ipnt=1, npnt)]
+    !end do
 end if
 end function
 
@@ -189,17 +189,17 @@ real function sqdist(x1,y1,z1,x2,y2,z2)
 !
 ! Compute component distance vectors and the squared distance:
 !
-      dx = dble(x1 - x2)
-      dy = dble(y1 - y2)
-      dz = dble(z1 - z2)
-      sqdist = 0.0
-      do i=1,3
-            cont   = rotmat(i,1) * dx &
-                   + rotmat(i,2) * dy &
-                   + rotmat(i,3) * dz
-            sqdist = sqdist + cont * cont
-      end do
-      return
-      end
+    dx = (x1 - x2)
+    dy = (y1 - y2)
+    dz = (z1 - z2)
+    sqdist = 0.0
+    do i=1,3
+        cont   = rotmat(i,1) * dx &
+                + rotmat(i,2) * dy &
+                + rotmat(i,3) * dz
+        sqdist = sqdist + cont * cont
+    end do
+    return
+end
 
 end module

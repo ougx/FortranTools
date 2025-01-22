@@ -9,7 +9,7 @@ set start=%time%
 	-vc sph 5000.0 0.04 0.05 ^
 	-v2 sph 5000.0 0.068 0.0  ^
 	-u --anis2 0.5 -bd 0.0 1.0^
-	--nmax 30 --nmax2 30^
+	--nmax 100 --nmax2 100^
 	-v -xy grid.csv
 
 set end=%time%

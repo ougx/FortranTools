@@ -4,6 +4,7 @@ program ppsgs
   use f90getopt
   !use m_mrgref
   !use m_inssor
+  use common
   use rotation
   !use normal_dist
   use variogram
@@ -12,12 +13,7 @@ program ppsgs
   use ieee_arithmetic
   use iso_fortran_env, only: input_unit, error_unit, output_unit
   implicit none
-
-  real, parameter :: verysmall = tiny(1.0e0) * 1000
-  real, parameter :: verylarge = huge(1.0e0) * 1e-3
-  real, parameter :: zero = 0.0e0
-  real, parameter :: one  = 1.0e0
-
+  character(8), parameter           :: version='20250122'
   type(kdtree2),  pointer           :: obstree
   type(kdtree2),  pointer           :: obstree2
   type(option_s), allocatable       :: opts(:)
@@ -37,32 +33,32 @@ program ppsgs
   real, allocatable       ::  solverAP(:), solverB(:)
   integer, allocatable    ::  IPIV(:)
 
-  class(variog), pointer  :: vario1=>null(), varioc=>null(), vario2=>null()
+  type(vgm_struct)        :: vario1, varioc, vario2
   ! local
   integer         :: matsize, npp, npp1, npp1o, npp1g, npp2, nppd, nppdu, mblock
-  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, isim, iout, ib, ntp
+  integer         :: ifile, ioerr, ifilefac, i, ii, jj, kk, ig, iv, isim, iout, ib, ntp
   real            :: cov0(3), cov00, cov00block, totblockweight
   real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:), tmpdrift(:,:)
   real, allocatable :: weights(:), matA(:,:), rhsB(:)
   integer, allocatable :: inear(:), inear2(:), inearg(:)
-  logical         :: correct_weight, writexy, verbose, neglect_error, writemat, showargs
+  logical         :: correct_weight, writexy, neglect_error, writemat, showargs
 
 
   allocate(opts, source=(/&
     option_s("dim"    ,     "d", 5, "define spatial dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
-    option_s("obsfile",    "of", 1, "observation data file. the columns should be id,x,(y,z),obsvalue in that file. drift value columns can be added after obsvalue if drift is used."), &
-    option_s("facfile",    "ff", 1, "interpolation factor file. the columns should be gindex,nobs,iobs1,iobs2... in that file. This file will be generated using this tool when grid file is defined."), &
-    option_s("gridfile",   "gf", 1, "grid file. the columns should be id,x,(y,z) in that file. drift value columns can be added if drift is used."), &
-    option_s("blockfile",  "bf", 1, "optional block file for block kriging; the content of this file is id,x,(y,z) and the counts of points used for each block."), &
-    option_s("blockweight","bw", 0, "read point weights for block kriging from the grid file; default is equal weighting for each point."), &
-    option_s("pathfile",   "pf", 1, "a file contain the indices of the calculation path, if not defined for sinluation, a random path will be generated"), &
+    option_s("obsfile",    "of", 1, "observation data file. the columns should be id,x(,y,z),obsvalue in that file. drift value columns can be added after obsvalue."), &
+    option_s("facfile",    "ff", 1, "interpolation factor file. This file can be created when both 'facfile' and 'gridfile' are defined."), &
+    option_s("gridfile",   "gf", 1, "grid file. the columns should be id,x(,y,z) in that file. drift value columns can be added if drift is used."), &
+    option_s("blockfile",  "bf", 1, "optional block file for block kriging; the content of this file is the counts of points used for each block, and x(,y,z)."), &
+    option_s("blockweight","bw", 0, "read point weights for block kriging from the grid file; default is equal weights for each point."), &
+    option_s("pathfile",   "pf", 1, "a file contain the indices of the calculation path, if not defined for sinluation, a random path will be generated."), &
     option_s("samfile",    "sf", 1, "a file contain samples from standard normal distribution."), &
     option_s("obsfile2",   "o2", 1, "secondary observation data file for the covariate. the columns should be x,(y,z),obsvalue in that file."), &
     option_s("seed",       "sd", 1, "seed number to generate random path and variance."), &
     option_s("sim",         "s", 0, "enable simulation. default is disable."), &
     option_s("nmax",       "n1", 1, "maximum number of primary variable used for Kriging. default is 200."), &
     option_s("nmax2",      "n2", 1, "maximum number of co-variate used for Kriging. default is 200."), &
-    option_s("unbias",      "u", 0, "whether to include unbias term; default is .false. for Simple Kriging; switch on for Ordinary Kriging;."), &
+    option_s("unbias",      "u", 0, "whether to include unbias term; default is .false. for Simple Kriging; switch on for Ordinary Kriging."), &
     option_s("ang1",       "a1", 1, "set azimuth angle for principal direction; default is 0."), &
     option_s("ang2",       "a2", 1, "set dip angle for principal direction; default is 0."), &
     option_s("ang3",       "a3", 1, "set third rotation angle; default is 0."), &
@@ -183,9 +179,9 @@ program ppsgs
       case("bs"); read(optarg, *) blocksize(:ndim)
       case("md"); read(optarg, *) maxdist
 
-      case("v1"); vario1=>get_vgm(optarg); cov0(1) = vario1%covfuc(zero)
-      case("vc"); varioc=>get_vgm(optarg); cov0(2) = varioc%covfuc(zero)
-      case("v2"); vario2=>get_vgm(optarg); cov0(3) = vario2%covfuc(zero)
+      case("v1"); call vario1%define(optarg)
+      case("vc"); call varioc%define(optarg)
+      case("v2"); call vario2%define(optarg)
 
       case("fm"); read(optarg, *) fomt
 
@@ -208,6 +204,10 @@ program ppsgs
   if (blocksize(1)>zero) then
     if (blockfile /= "") call perr("  Error: defining both 'blockfile(bf)' or 'blocksize(bs)' is not allowed.")
   end if
+
+  cov0(1) = vario1%covfuc(zero)
+  cov0(2) = varioc%covfuc(zero)
+  cov0(3) = vario2%covfuc(zero)
 
   allocate(irandpath(ngrid))
   allocate(obs(ndim+1, nobs))     ! coordinates plus values
@@ -784,30 +784,20 @@ program ppsgs
     else
       rgrid = rotate(ndim, ngrid, grid(1:ndim, :), centerloc)
     end if
+    if (verbose) print*, 'Building distance kdtree ...1'
     if (nsim>0) then
       allocate(kdmask(nobs+nblock))
       kdmask(:nobs) = .true.
       kdmask(nobs:) = .false.
-      ! print*, 'Building distance kdtree 1'
       obstree => kdtree2_create(robs         , sort=.false., rearrange=.false.)
     else
-      ! print*, 'Building distance kdtree 1a'
-      ! print "(3F10.2)", centerloc
-      ! print "(3F10.2)", robs(:,nobs-10:nobs)
-      ! print*, 'Building distance kdtree 1', nobs
-      ! do ii=1, nobs
-      !   print*, robs(:,ii)
-      ! end do
-      obstree => kdtree2_create(robs(:,:nobs), sort=.false., rearrange=.false.)
-      ! print*, 'Building distance kdtree 1a'
+      obstree => kdtree2_create(robs(:,1:nobs), sort=.false., rearrange=.false.)
     end if
-    ! print*, 'Building distance kdtree 1z'
 
     if (nobs2>0) then
       rob2 = rotate(ndim, nobs2, obs2(1:ndim, 1:nobs2), centerloc)
       obstree2 => kdtree2_create(rob2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
     end if
-    ! print*, 'Building distance kdtree 2'
   end subroutine set_dist
 
   subroutine solve_matrix()
@@ -828,7 +818,7 @@ program ppsgs
       weights = ieee_value(weights(1), ieee_signaling_nan)
       if (.not. neglect_error) then
         call write_matrix()
-        write(sig, "(I0)") ig
+        write(sig, "(I0)") ib
         call perr(new_line("")//'Failed to find solution of the linear system at cell '//trim(sig))
       end if
     else
@@ -838,8 +828,8 @@ program ppsgs
       else
         weights(1:nppdu) = solverB(1:nppdu)
       end if
-      if (writemat) call write_matrix()
     end if
+    if (writemat) call write_matrix()
   end subroutine solve_matrix
 
   subroutine open_output()
@@ -970,6 +960,7 @@ program ppsgs
 
     print "(A   )", ""
     print "(A   )", "==================== Configuration ===================="
+    print "(A,A)",  ' Version                : ', version
     print "(A,A )", " Observation file 1     : ", trim(obsfile)
     print "(A,A )", " Observation file 2     : ", trim(obsfile2)
     print "(A,A )", " grid file              : ", trim(gridfile)
@@ -1001,9 +992,9 @@ program ppsgs
     print "(A,G0)", " vmin                   : ", vmin
     print "(A,G0)", " vmax                   : ", vmax
     print "(A,G0)", " maxdist                : ", maxdist
-    print        *,  "variogram model 1      : ", vario1%vtype,vario1%range,vario1%sill,vario1%nugget
-    print        *,  "variogram model cross  : ", varioc%vtype,varioc%range,varioc%sill,varioc%nugget
-    print        *,  "variogram model 2      : ", vario2%vtype,vario2%range,vario2%sill,vario2%nugget
+    do iv=1, vario1%nstruct; print        *,  "variogram model 1      : ", vario1%vgms(iv)%vgm%tostr(); end do
+    do iv=1, varioc%nstruct; print        *,  "variogram model cross  : ", varioc%vgms(iv)%vgm%tostr(); end do
+    do iv=1, vario2%nstruct; print        *,  "variogram model 2      : ", vario2%vgms(iv)%vgm%tostr(); end do
     print "(A,A )", " Output format          : ", trim(fomt)
     print "(A   )", "================== End Configuration =================="
     print "(A   )", ""
@@ -1017,6 +1008,7 @@ program ppsgs
     print "(A)", ''
     print "(A)", '   Perform Kriging or Sequential Gaussian Simulation.'
     print "(A)", '   Developed by mou@sspa.com.'
+    print "(A)", '   Version: '//version//'.'
     print "(A)", ' '
     print "(A)", '   Arguments:'
     do ii=1, Mandatory
@@ -1027,7 +1019,7 @@ program ppsgs
     do ii=Mandatory+1, size(opts)
       print "(A)", '      -'//opts(ii)%short//'  or  --'//opts(ii)%name(:10)//'  '//trim(opts(ii)%description)
     end do
-    print "(A)", '      output                 output file name. If output=="~" or omitted, output will print to screen.'
+    print "(A)", '      output                 output file name. If output=="~" or omitted, output will be printed on screen.'
     print "(A)", ' '
     stop
   end subroutine showhelp

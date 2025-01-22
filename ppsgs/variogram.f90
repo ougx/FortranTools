@@ -1,6 +1,7 @@
 module variogram
 
-  real, parameter   :: pi = 3.141592653589793e0
+  use common, only     : pi
+  integer, parameter  :: maxvgm = 99
 
   type, abstract :: variog
     character(3) :: vtype
@@ -11,6 +12,7 @@ module variogram
     !procedure           :: initialize
     procedure, NOPASS   :: corefunc
     procedure           :: covfuc
+    procedure           :: tostr
   end type
 
   type, extends(variog) ::  variog_sph
@@ -48,7 +50,52 @@ module variogram
     procedure, NOPASS   :: corefunc => corefunc_lin
   end type
 
+  type ptr_vgm
+    class(variog), pointer  :: vgm
+  end type ptr_vgm
+
+  type vgm_struct
+    integer                 :: nstruct = 0
+    real                    :: nugget = 0.0
+    type(ptr_vgm)           :: vgms(maxvgm)
   contains
+    procedure               :: covfuc => covfuc_struct
+    procedure               :: define => define_struct
+    procedure               :: tostr  => tostr_struct
+  end type vgm_struct
+
+  contains
+
+  elemental function covfuc_struct(this, h) result(res)
+    class(vgm_struct), intent(in) :: this
+    real, intent(in)              :: h
+    integer :: iv
+    res = 0.0
+    do iv = 1, this%nstruct
+      res = res + this%vgms(iv)%vgm%covfuc(h)
+    end do
+  end function
+
+  subroutine define_struct(this, spec)
+    class(vgm_struct),intent(inout)   :: this
+    character(*), intent(in)          :: spec
+    this%nstruct = this%nstruct + 1
+    this%vgms(this%nstruct)%vgm => get_vgm(spec)
+    this%nugget = this%nugget + this%vgms(this%nstruct)%vgm%nugget
+  end subroutine
+
+  function tostr_struct(this) result(res)
+    class(vgm_struct),intent(inout)   :: this
+    character(:), allocatable         :: res
+    ! local
+    integer :: iv
+    character(256)                    :: para(this%nstruct)
+
+    do iv = 1, this%nstruct
+      if (iv>1) res = trim(res) // new_line(" ")
+      res = trim(res) // this%vgms(iv)%vgm%tostr()
+    end do
+  end function
 
   function get_vgm(spec) result(res)
     character(*), intent(in) :: spec
@@ -66,6 +113,16 @@ module variogram
     case('lin'); allocate(res, source=variog_lin(vtype, range, sill, nugget))
     case default; print*, 'Unknown variogram model.'; stop
     end select
+  end function
+
+  function tostr(this) result(res)
+    class(variog), intent(in)     :: this
+    character(:), allocatable     :: res
+    ! local
+    character(256)                :: para
+
+    write(para, "(3G15.7)") this%range, this%sill, this%nugget
+    res = this%vtype//"  "//trim(para)
   end function
 
   elemental function covfuc(this, dist) result(res)
