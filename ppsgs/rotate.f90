@@ -17,7 +17,7 @@ subroutine setrot()
 !
 ! INPUT PARAMETERS: (moved to module definition)
 !
-!   ang1             Azimuth angle for principal direction
+!   ang1             Azimuth angle for principal direction (clockwise)
 !   ang2             Dip angle for principal direction
 !   ang3             Third rotation angle
 !   anis1            First anisotropy ratio

@@ -41,7 +41,7 @@ program ppsgs
   real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:), tmpdrift(:,:)
   real, allocatable :: weights(:), matA(:,:), rhsB(:)
   integer, allocatable :: inear(:), inear2(:), inearg(:)
-  logical         :: correct_weight, writexy, neglect_error, writemat, showargs
+  logical         :: correct_weight, writexy, neglect_error, writemat, showargs, validate
 
 
   allocate(opts, source=(/&
@@ -75,6 +75,7 @@ program ppsgs
     option_s("writexy",    "xy", 0, "write coordinates in the output; default only estimates are written."), &
     option_s("coerce",     "ec", 0, "failed grid point will be set as NaN when it fails to solve equation."), &
     option_s("verbose",     "v", 0, "print running logs to screen."), &
+    option_s("validate",   "cv", 0, "perform Leave-one-out cross-validation (LOOCV)."), &
     option_s("writemat",   "wm", 0, "write the matrix for debugging."), &
     option_s("showargs",   "sa", 0, "show arguments."), &
     option_s("help"   ,     "h", 0, "show this message.") &
@@ -115,6 +116,7 @@ program ppsgs
   neglect_error = .false.
   writemat = .false.
   showargs = .false.
+  validate = .false.
   iblockpntweight = 0
   blocksize = zero
 
@@ -188,6 +190,7 @@ program ppsgs
       case("ec"); neglect_error = .true.
       case("xy"); writexy = .true.
       case( "v"); verbose = .true.
+      case("cv"); validate = .true.
       case("wm"); writemat = .true.
 
       case("sa"); showargs = .true.
@@ -209,6 +212,10 @@ program ppsgs
   cov0(2) = varioc%covfuc(zero)
   cov0(3) = vario2%covfuc(zero)
 
+  if (validate) then
+    if (nsim>0) call perr("  Error: Simulation should not be activated in cross validation mode.")
+    ngrid = nobs
+  end if
   allocate(irandpath(ngrid))
   allocate(obs(ndim+1, nobs))     ! coordinates plus values
   allocate(iobs(nobs))
@@ -230,12 +237,19 @@ program ppsgs
 
   call readobs(1)
   if (nobs2>0) call readobs(2)
-  if (gridfile /= "") call readgrid()
+  if (validate) then
+    ! grid is identical as the observations
+    ngrid = nobs
+    grid(1:ndim,:) = obs(1:ndim,:)
+    grid(ndim+1,:) = one
+  else if (gridfile /= "") then
+    call readgrid()
+  end if
   call set_block()
   call random_seed_initialize(seed)
   call set_samples()
 
-  if (gridfile == '') then
+  if (gridfile == '' .and. (.not. validate)) then
     call calc_by_factor_file
   else
     call kriging_prepare
@@ -281,14 +295,16 @@ program ppsgs
   end subroutine calc_by_factor_file
 
   subroutine kriging_prepare
+    integer :: mmax1
+    mmax1 = nobs+(ngrid-1)*nsim
+    if (validate) mmax1 = mmax1 - 1
     nsim = min(nsim, 1)
-    nmax = min(nmax, nobs+(ngrid-1)*nsim)
+    nmax = min(nmax, mmax1)
     if (nobs2>0) then
       if (nmax2==0) then
         nmax2 = nmax
-      else
-        nmax2=min(nmax2, nobs2)
       end if
+      nmax2=min(nmax2, nobs2)
     end if
     call setrot()
 
@@ -373,7 +389,11 @@ program ppsgs
       end if
       ! print*, "krige1200 ", "search for the nearest obs"
       xcell = robs(:ndim,nobs+ib)
-      if (nobs+mblock>nmax) then
+      if (validate) then
+        kdmask(ib) = .false.
+        if (ib>1) kdmask(ib-1)=.true.
+      end if
+      if (any(.not. kdmask) .OR. nmax<nobs+mblock) then
         call kdtree2_n_nearest(obstree,xcell,nmax,kdnearest,kdmask)
         npp1o = 0
         npp1g = 0
@@ -394,7 +414,8 @@ program ppsgs
         npp1 = nobs + mblock
         inear(1:npp1) = [(ii,ii=1,npp1)]
       end if
-      ! print*, "krige1300", "search for the nearest obs2"
+
+      ! print*, "krige1300", "search for the nearest obs", kdmask
       if (nobs2>0) then
         if (nmax2<nobs2) then
           ! print*, "krige18001 ", 'search for neighbor2'
@@ -784,11 +805,10 @@ program ppsgs
     else
       rgrid = rotate(ndim, ngrid, grid(1:ndim, :), centerloc)
     end if
-    if (verbose) print*, 'Building distance kdtree ...1'
+    allocate(kdmask(nobs+nblock*nsim))
+    kdmask = .true.
+    kdmask(nobs+1:) = .false.
     if (nsim>0) then
-      allocate(kdmask(nobs+nblock))
-      kdmask(:nobs) = .true.
-      kdmask(nobs:) = .false.
       obstree => kdtree2_create(robs         , sort=.false., rearrange=.false.)
     else
       obstree => kdtree2_create(robs(:,1:nobs), sort=.false., rearrange=.false.)
