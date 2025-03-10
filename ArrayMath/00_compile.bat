@@ -1,7 +1,8 @@
-call ..\compiler_setting.bat
+call ..\compiler_setting_gfortran.bat
 
-echo %ff%  ..\common\f90getopt.F90 ..\sorting\mrgref.f90 ArrayMath.f90 -o ArrayMath
-%ff%  -o ArrayMath ^
+rem  -g -fcheck=all
+echo %ff%  -g -fcheck=all ..\common\f90getopt.F90 ..\sorting\mrgref.f90 ArrayMath.f90 -o ArrayMath
+%ff%   -o ArrayMath ^
   ..\common\str_upper.f90  ^
   ..\common\f90getopt.F90  ^
   ..\sorting\mrgref.f90    ^
@@ -26,4 +27,6 @@ echo %ff%  ..\common\f90getopt.F90 ..\sorting\mrgref.f90 ArrayMath.f90 -o ArrayM
   ..\minv\sgetrf.f         ^
   ..\minv\sgetrf2.f        ^
   ..\minv\sgetri.f         ^
-  ArrayMath.f90 ^
+  ArrayMath.f90 
+
+pause
