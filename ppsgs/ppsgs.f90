@@ -41,44 +41,45 @@ program ppsgs
   real, allocatable :: tmpdist(:), tmpdist2(:), xcell(:), tmpdrift(:,:)
   real, allocatable :: weights(:), matA(:,:), rhsB(:)
   integer, allocatable :: inear(:), inear2(:), inearg(:)
-  logical         :: correct_weight, writexy, neglect_error, writemat, showargs, validate
+  logical         :: correct_weight, writexy, neglect_error, writemat, showargs, validate, projectedsearch
 
 
   allocate(opts, source=(/&
-    option_s("dim"    ,     "d", 5, "define spatial dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
-    option_s("obsfile",    "of", 1, "observation data file. the columns should be id,x(,y,z),obsvalue in that file. drift value columns can be added after obsvalue."), &
-    option_s("facfile",    "ff", 1, "interpolation factor file. This file can be created when both 'facfile' and 'gridfile' are defined."), &
-    option_s("gridfile",   "gf", 1, "grid file. the columns should be id,x(,y,z) in that file. drift value columns can be added if drift is used."), &
-    option_s("blockfile",  "bf", 1, "optional block file for block kriging; the content of this file is the counts of points used for each block, and x(,y,z)."), &
-    option_s("blockweight","bw", 0, "read point weights for block kriging from the grid file; default is equal weights for each point."), &
-    option_s("pathfile",   "pf", 1, "a file contain the indices of the calculation path, if not defined for sinluation, a random path will be generated."), &
-    option_s("samfile",    "sf", 1, "a file contain samples from standard normal distribution."), &
-    option_s("obsfile2",   "o2", 1, "secondary observation data file for the covariate. the columns should be x,(y,z),obsvalue in that file."), &
-    option_s("seed",       "sd", 1, "seed number to generate random path and variance."), &
-    option_s("sim",         "s", 0, "enable simulation. default is disable."), &
-    option_s("nmax",       "n1", 1, "maximum number of primary variable used for Kriging. default is 200."), &
-    option_s("nmax2",      "n2", 1, "maximum number of co-variate used for Kriging. default is 200."), &
-    option_s("unbias",      "u", 0, "whether to include unbias term; default is .false. for Simple Kriging; switch on for Ordinary Kriging."), &
-    option_s("ang1",       "a1", 1, "set azimuth angle for principal direction; default is 0."), &
-    option_s("ang2",       "a2", 1, "set dip angle for principal direction; default is 0."), &
-    option_s("ang3",       "a3", 1, "set third rotation angle; default is 0."), &
-    option_s("anis1",      "s1", 1, "set first anisotropy ratio; default is 1."), &
-    option_s("anis2",      "s2", 1, "set second anisotropy ratio; default is 1."), &
-    option_s("vario1",     "v1", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin."), &
-    option_s("vario2",     "v2", 4, "set variogram for the secondary covariate."), &
-    option_s("varioc",     "vc", 4, "set cross-variogram between the primary and secondary variables."), &
-    option_s("bounds",     "bd", 2, "set the lower and upper bounds, if not set, the simulation is unbounded."), &
-    option_s("blocksize",  "bs", 1, "set block size for block kriging; 4 × 4 Gaussian quadrature block discretization will be used to assign points and weights."), &
-    option_s("maxdist",    "md", 1, "set the maximum distance for search, this is the rotated/anisotropic distance if there is rotation/anisotropy."), &
-    option_s("correct",    "cw", 0, "apply weight correction by removing negative weights. default is no weight correction."), &
-    option_s("fmt"    ,    "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(G0.12)'."), &
-    option_s("writexy",    "xy", 0, "write coordinates in the output; default only estimates are written."), &
-    option_s("coerce",     "ec", 0, "failed grid point will be set as NaN when it fails to solve equation."), &
-    option_s("verbose",     "v", 0, "print running logs to screen."), &
-    option_s("validate",   "cv", 0, "perform Leave-one-out cross-validation (LOOCV)."), &
-    option_s("writemat",   "wm", 0, "write the matrix for debugging."), &
-    option_s("showargs",   "sa", 0, "show arguments."), &
-    option_s("help"   ,     "h", 0, "show this message.") &
+    option_s("dim"    ,        "d", 5, "define spatial dimension; number of observation; number of grid; number of covariate observation. number of drifts."), &
+    option_s("obsfile",       "of", 1, "observation data file. the columns should be id,x(,y,z),obsvalue in that file. drift value columns can be added after obsvalue."), &
+    option_s("facfile",       "ff", 1, "interpolation factor file. This file can be created when both 'facfile' and 'gridfile' are defined."), &
+    option_s("gridfile",      "gf", 1, "grid file. the columns should be id,x(,y,z) in that file. drift value columns can be added if drift is used."), &
+    option_s("blockfile",     "bf", 1, "optional block file for block kriging; the content of this file is the counts of points used for each block, and x(,y,z)."), &
+    option_s("blockweight",   "bw", 0, "read point weights for block kriging from the grid file; default is equal weights for each point."), &
+    option_s("pathfile",      "pf", 1, "a file contain the indices of the calculation path, if not defined for sinluation, a random path will be generated."), &
+    option_s("samfile",       "sf", 1, "a file contain samples from standard normal distribution."), &
+    option_s("obsfile2",      "o2", 1, "secondary observation data file for the covariate. the columns should be x,(y,z),obsvalue in that file."), &
+    option_s("seed",          "sd", 1, "seed number to generate random path and variance."), &
+    option_s("sim",            "s", 0, "enable simulation. default is disable."), &
+    option_s("nmax",          "n1", 1, "maximum number of primary variable used for Kriging. default is 200."), &
+    option_s("nmax2",         "n2", 1, "maximum number of co-variate used for Kriging. default is 200."), &
+    option_s("unbias",         "u", 0, "whether to include unbias term; default is .false. for Simple Kriging; switch on for Ordinary Kriging."), &
+    option_s("ang1",          "a1", 1, "set azimuth angle for principal direction; default is 0."), &
+    option_s("ang2",          "a2", 1, "set dip angle for principal direction; default is 0."), &
+    option_s("ang3",          "a3", 1, "set third rotation angle; default is 0."), &
+    option_s("anis1",         "s1", 1, "set first anisotropy ratio; default is 1."), &
+    option_s("anis2",         "s2", 1, "set second anisotropy ratio; default is 1."), &
+    option_s("vario1",        "v1", 4, "set variogram, following type, range, sill, nugget; type must be sph, exp, gau, pow, cir, hol or lin."), &
+    option_s("vario2",        "v2", 4, "set variogram for the secondary covariate."), &
+    option_s("varioc",        "vc", 4, "set cross-variogram between the primary and secondary variables."), &
+    option_s("bounds",        "bd", 2, "set the lower and upper bounds, if not set, the simulation is unbounded."), &
+    option_s("blocksize",     "bs", 1, "set block size for block kriging; 4 × 4 Gaussian quadrature block discretization will be used to assign points and weights."), &
+    option_s("maxdist",       "md", 1, "set the maximum distance for search, this is the rotated/anisotropic distance if there is rotation/anisotropy."), &
+    option_s("correct",       "cw", 0, "apply weight correction by removing negative weights. default is no weight correction."), &
+    option_s("direct-search", "ds", 0, "neiborgh search is performed based on the projected coordinates using anisotrpy settings. this option switch to non-projected coordinates."), &
+    option_s("fmt"    ,       "fm", 1, "fortran format to write results such as '(10F10.3)'; default is '(G0.12)'."), &
+    option_s("writexy",       "xy", 0, "write coordinates in the output; default only estimates are written."), &
+    option_s("coerce",        "ec", 0, "failed grid point will be set as NaN when it fails to solve equation."), &
+    option_s("verbose",        "v", 0, "print running logs to screen."), &
+    option_s("validate",      "cv", 0, "perform Leave-one-out cross-validation (LOOCV)."), &
+    option_s("writemat",      "wm", 0, "write the matrix for debugging."), &
+    option_s("showargs",      "sa", 0, "show arguments."), &
+    option_s("help"   ,        "h", 0, "show this message.") &
   /))
 
 
@@ -117,6 +118,7 @@ program ppsgs
   writemat = .false.
   showargs = .false.
   validate = .false.
+  projectedsearch=.true.
   iblockpntweight = 0
   blocksize = zero
 
@@ -191,6 +193,7 @@ program ppsgs
       case("xy"); writexy = .true.
       case( "v"); verbose = .true.
       case("cv"); validate = .true.
+      case("ds"); projectedsearch = .false.
       case("wm"); writemat = .true.
 
       case("sa"); showargs = .true.
@@ -217,7 +220,7 @@ program ppsgs
     ngrid = nobs
   end if
   allocate(irandpath(ngrid))
-  allocate(obs(ndim+1, nobs))     ! coordinates plus values
+  allocate(obs(ndim+1, nobs+ngrid))     ! coordinates plus values
   allocate(iobs(nobs))
   allocate(grid(ndim+1, ngrid))   ! coordinates plus weights for block kriging
   allocate(igrid(ngrid))
@@ -239,8 +242,7 @@ program ppsgs
   if (nobs2>0) call readobs(2)
   if (validate) then
     ! grid is identical as the observations
-    ngrid = nobs
-    grid(1:ndim,:) = obs(1:ndim,:)
+    grid(1:ndim,:nobs) = obs(1:ndim,:nobs)
     grid(ndim+1,:) = one
   else if (gridfile /= "") then
     call readgrid()
@@ -388,13 +390,19 @@ program ppsgs
         end if
       end if
       ! print*, "krige1200 ", "search for the nearest obs"
-      xcell = robs(:ndim,nobs+ib)
+      if (projectedsearch) then
+        xcell = robs(:ndim,nobs+ib)
+      else
+        xcell = obs(:ndim,nobs+ib)
+      end if
       if (validate) then
         kdmask(ib) = .false.
         if (ib>1) kdmask(ib-1)=.true.
       end if
       if (any(.not. kdmask) .OR. nmax<nobs+mblock) then
+        ! print*, "krige1205", "search for the nearest obs"
         call kdtree2_n_nearest(obstree,xcell,nmax,kdnearest,kdmask)
+        ! print*, "krige1210", "search for the nearest obs", kdmask(:10)
         npp1o = 0
         npp1g = 0
         npp1 = nmax
@@ -415,7 +423,7 @@ program ppsgs
         inear(1:npp1) = [(ii,ii=1,npp1)]
       end if
 
-      ! print*, "krige1300", "search for the nearest obs", kdmask
+      ! print*, "krige1300", "search for the nearest obs", kdmask(:10)
       if (nobs2>0) then
         if (nmax2<nobs2) then
           ! print*, "krige18001 ", 'search for neighbor2'
@@ -430,8 +438,13 @@ program ppsgs
         npp2 = 0
       end if
       ! print*, "krige1400 calculate the distance"
-      tmpdist(1:npp1)               = sdistn1(robs(:,inear (1:npp1)), xcell)
-      if (nobs2>0) tmpdist2(1:npp2) = sdistn1(rob2(:,inear2(1:npp2)), xcell)
+      if (projectedsearch) then
+        tmpdist(1:npp1)               = sdistn1(robs(:ndim,inear (1:npp1)), xcell)
+        if (nobs2>0) tmpdist2(1:npp2) = sdistn1(rob2(:ndim,inear2(1:npp2)), xcell)
+      else
+        tmpdist(1:npp1)               = sdistn1(obs (:ndim,inear (1:npp1)), xcell)
+        if (nobs2>0) tmpdist2(1:npp2) = sdistn1(obs2(:ndim,inear2(1:npp2)), xcell)
+      end if
 
       ! print*, "krige1500 validate data for colocation and maxdist"
       if (any(tmpdist(1:npp1)<verysmall)) then
@@ -794,29 +807,34 @@ program ppsgs
   end subroutine perr
 
   subroutine set_dist()
-    real, allocatable :: centerloc(:)
+    real :: centerloc(ndim)
     if (verbose) print*, 'Building distance kdtree ...'
 
     ! rotating/scaling
     centerloc = sum(blocks(1:ndim, 1:nblock), dim=2)/nblock
-    robs = rotate(ndim, nobs+nblock, reshape([obs(1:ndim, :), blocks(1:ndim, :)], [ndim, nobs+nblock]), centerloc)
+    obs(:ndim,nobs+1:) = blocks(1:ndim, :) ! the order of blocks has been shuffled
+    robs = rotate(ndim, nobs+nblock, obs(:ndim,:), centerloc)
     if (blockfile=="" .and. blocksize(1)==zero) then
       rgrid = robs(:,inversepath+nobs)
     else
       rgrid = rotate(ndim, ngrid, grid(1:ndim, :), centerloc)
     end if
     allocate(kdmask(nobs+nblock*nsim))
-    kdmask = .true.
+    kdmask(:nobs)   = .true.
     kdmask(nobs+1:) = .false.
-    if (nsim>0) then
-      obstree => kdtree2_create(robs         , sort=.false., rearrange=.false.)
+    if (projectedsearch) then
+      obstree => kdtree2_create(robs(:ndim,:nobs+nsim*nblock), sort=.false., rearrange=.false.)
     else
-      obstree => kdtree2_create(robs(:,1:nobs), sort=.false., rearrange=.false.)
+      obstree => kdtree2_create(obs (:ndim,:nobs+nsim*nblock), sort=.false., rearrange=.false.)
     end if
 
     if (nobs2>0) then
       rob2 = rotate(ndim, nobs2, obs2(1:ndim, 1:nobs2), centerloc)
-      obstree2 => kdtree2_create(rob2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
+      if (projectedsearch) then
+        obstree2 => kdtree2_create(rob2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
+      else
+        obstree2 => kdtree2_create(obs2(1:ndim,1:nobs2), sort=.false., rearrange=.false.)
+      end if
     end if
   end subroutine set_dist
 
@@ -1001,6 +1019,8 @@ program ppsgs
     print "(A,A )", " unbias                 : ", yesno(unbias==1)
     print "(A,A )", " weight correction      : ", yesno(correct_weight)
     print "(A,A )", " Neglect error          : ", yesno(neglect_error)
+    print "(A,A )", " LOO-Cross Validation   : ", yesno(validate)
+    print "(A,A )", " Project coordinates    : ", yesno(projectedsearch)
     print "(A,A )", " Write CSV with coords  : ", yesno(writexy)
     print "(A,A )", " Write matrix for debug : ", yesno(writemat)
     print "(A,A )", " Verbose                : ", yesno(verbose)
